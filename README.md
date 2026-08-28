@@ -70,12 +70,15 @@ Trocar o cabo de lugar não quebra nada: IP e gateway são redetectados a cada
 
 ### Os números daqui de casa
 
-| Link | ↓ download | ↑ upload | ping | uptime 30 d |
+| Link | ↓ download | ↑ upload | ping | jitter |
 |---|---|---|---|---|
-| **GIGA** (fibra, `eth0`) | 596 Mbps | 491 Mbps | 4,0 ms | 99,9 % |
-| **IMPACTO** (backup, USB LAN) | 6,7 Mbps | 5,8 Mbps | 3,3 ms | 99,9 % |
+| **GIGA** (fibra, `eth0`) | 596 Mbps | 491 Mbps | 3,9 ms | 0,18 ms |
+| **IMPACTO** (backup, USB LAN) | 6,7 Mbps | 5,8 Mbps | 4,1 ms | 0,36 ms |
 
 Sim, o backup é lento. É backup.
+
+(Uptime não entra na tabela porque este monitor é novo em folha — números de
+disponibilidade só valem depois de umas boas semanas medindo.)
 
 ## "Mas por que não Grafana? Zabbix? Smokeping?"
 
