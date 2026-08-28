@@ -1,0 +1,9 @@
+# banco, logs e estado de execução: cada instalação tem os seus
+data/
+*.log
+*.pid
+*.lock
+health.fail
+
+__pycache__/
+*.py[cod]

@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d0d">
+<title>Monitor de Internet — GIGA e IMPACTO</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📡</text></svg>">
+</head>
+<body>
+
+<div id="alerta" class="alerta oculto" role="alert" aria-live="assertive">
+  <span class="alerta-icone" id="alerta-icone">🔴</span>
+  <div class="alerta-texto">
+    <strong id="alerta-titulo">—</strong>
+    <span id="alerta-detalhe" class="alerta-detalhe"></span>
+  </div>
+  <button id="btn-silenciar" class="btn btn-ghost" type="button">Silenciar som</button>
+  <button id="btn-fechar-alerta" class="btn btn-ghost" type="button" aria-label="Fechar">✕</button>
+</div>
+
+<header class="topo">
+  <div class="topo-titulo">
+    <h1>Monitor de Internet</h1>
+    <p class="sub">GIGA e IMPACTO · sondagem contínua a cada 2&nbsp;s</p>
+  </div>
+  <div class="topo-meta">
+    <span id="conexao" class="pill pill-off">conectando…</span>
+    <span id="relogio" class="relogio">--:--:--</span>
+    <button id="btn-notif" class="btn btn-ghost" type="button">Ativar notificações</button>
+  </div>
+</header>
+
+<main>
+
+<!-- ------------------------------------------------ cards de status -->
+<section class="cards" id="cards" aria-label="Estado atual dos links"></section>
+
+<!-- ------------------------------------------------ teste de velocidade -->
+<section class="painel">
+  <div class="painel-topo">
+    <div>
+      <h2>Teste de velocidade</h2>
+      <p class="painel-sub">Mede download e upload reais de cada link, um de cada vez,
+        preso à interface. Enquanto roda, o link fica cheio de propósito — o alerta de
+        latência alta daquele link é suspenso.</p>
+    </div>
+    <label class="campo campo-curto"><span>Duração por direção</span>
+      <select id="v-dur">
+        <option value="3">3 s (rápido)</option>
+        <option value="5" selected>5 s (padrão)</option>
+        <option value="10">10 s (preciso)</option>
+      </select>
+    </label>
+  </div>
+  <div class="vel-grid" id="vel-grid"></div>
+  <p id="v-msg" class="muted"></p>
+</section>
+
+<!-- ------------------------------------------------ latência -->
+<section class="painel">
+  <div class="painel-topo">
+    <div>
+      <h2>Latência</h2>
+      <p class="painel-sub">Tempo de resposta até a internet. Faixa clara = mínimo–máximo do período.</p>
+    </div>
+    <div class="periodos" id="periodos" role="group" aria-label="Período">
+      <button class="btn-per" data-span="30">30s</button>
+      <button class="btn-per" data-span="60">1min</button>
+      <button class="btn-per" data-span="3600">1h</button>
+      <button class="btn-per" data-span="21600">6h</button>
+      <button class="btn-per ativo" data-span="86400">24h</button>
+      <button class="btn-per" data-span="604800">7d</button>
+      <button class="btn-per" data-span="2592000">30d</button>
+    </div>
+  </div>
+  <div class="legenda" id="legenda">
+    <span class="leg"><i class="sw" style="background:var(--giga)"></i>GIGA</span>
+    <span class="leg"><i class="sw" style="background:var(--impacto)"></i>IMPACTO</span>
+    <span class="leg"><i class="sw sw-queda"></i>faixa de queda</span>
+    <span class="leg"><i class="sw" style="background:var(--sem-dado)"></i>sem monitoramento</span>
+  </div>
+  <div class="grafico-wrap" id="wrap-lat">
+    <svg id="g-lat" class="grafico" role="img" aria-label="Gráfico de latência"></svg>
+    <div class="tooltip oculto" id="tt-lat"></div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------ perda -->
+<section class="painel">
+  <h2>Perda de pacotes</h2>
+  <p class="painel-sub">Percentual de pacotes sem resposta em cada intervalo.</p>
+  <div class="grafico-wrap" id="wrap-perda">
+    <svg id="g-perda" class="grafico grafico-baixo" role="img" aria-label="Gráfico de perda de pacotes"></svg>
+    <div class="tooltip oculto" id="tt-perda"></div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------ disponibilidade -->
+<section class="painel">
+  <h2>Linha do tempo de disponibilidade</h2>
+  <p class="painel-sub">Cada barra é um intervalo do período. Passe o mouse para ver o detalhe.</p>
+  <div id="timelines"></div>
+  <div class="legenda legenda-status">
+    <span class="leg"><i class="sw" style="background:var(--good)"></i>no ar</span>
+    <span class="leg"><i class="sw" style="background:var(--warning)"></i>degradado</span>
+    <span class="leg"><i class="sw" style="background:var(--critical)"></i>fora do ar</span>
+    <span class="leg"><i class="sw" style="background:var(--sem-dado)"></i>sem dados</span>
+  </div>
+</section>
+
+<!-- ------------------------------------------------ estatísticas -->
+<section class="painel">
+  <h2>Estatísticas do período</h2>
+  <p class="painel-sub" id="resumo-sub">—</p>
+  <div class="tabela-wrap">
+    <table class="tabela tabela-resumo" id="tab-resumo">
+      <thead><tr><th scope="col">Métrica</th><th scope="col">GIGA</th><th scope="col">IMPACTO</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="legenda legenda-qualidade">
+    <span class="leg"><span class="chip q-bom">✔</span>dentro do esperado</span>
+    <span class="leg"><span class="chip q-medio">!</span>atenção</span>
+    <span class="leg"><span class="chip q-ruim">✕</span>fora do aceitável</span>
+    <span class="leg"><span class="chip q-neutro">–</span>sem julgamento</span>
+    <span class="leg"><span class="pill-melhor">melhor</span>o melhor dos dois links na métrica</span>
+  </div>
+</section>
+
+<!-- ------------------------------------------------ eventos -->
+<section class="painel">
+  <div class="painel-topo">
+    <div>
+      <h2>Histórico de quedas e alertas</h2>
+      <p class="painel-sub">Registro completo, com hora exata da queda, do retorno e a duração.</p>
+    </div>
+    <div class="filtros">
+      <label class="campo"><span>Link</span>
+        <select id="f-link"><option value="">Todos</option><option>GIGA</option><option>IMPACTO</option></select>
+      </label>
+      <label class="campo"><span>Tipo</span>
+        <select id="f-tipo">
+          <option value="">Todos</option>
+          <option value="QUEDA">Quedas</option>
+          <option value="LATENCIA_ALTA">Latência alta</option>
+        </select>
+      </label>
+    </div>
+  </div>
+  <div class="tabela-wrap wrap-eventos">
+    <table class="tabela" id="tab-eventos">
+      <thead><tr>
+        <th scope="col">Link</th><th scope="col">Tipo</th><th scope="col">Início</th>
+        <th scope="col">Fim</th><th scope="col">Duração</th><th scope="col">Causa</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="paginacao">
+    <button class="btn" id="ev-prev" type="button">‹ Anteriores</button>
+    <span id="ev-info" class="muted">—</span>
+    <button class="btn" id="ev-next" type="button">Próximos ›</button>
+  </div>
+</section>
+
+<!-- ------------------------------------------------ configurações -->
+<section class="painel">
+  <details id="config">
+    <summary><h2 class="inline">Configurações e alertas</h2></summary>
+    <div class="config-grid">
+      <label class="campo campo-largo"><span>URL do webhook (Discord, Slack, n8n, Home Assistant…)</span>
+        <input type="url" id="c-webhook" placeholder="https://…" autocomplete="off">
+      </label>
+      <label class="campo campo-check">
+        <input type="checkbox" id="c-webhook-on"><span>Enviar alertas para o webhook</span>
+      </label>
+      <label class="campo"><span>Latência considerada alta (ms)</span>
+        <input type="number" id="c-lat" min="10" max="5000" step="10">
+      </label>
+      <label class="campo"><span>Perda considerada alta (%)</span>
+        <input type="number" id="c-loss" min="1" max="100" step="1">
+      </label>
+      <label class="campo"><span>Jitter considerado alto (ms)</span>
+        <input type="number" id="c-jit" min="1" max="1000" step="5">
+      </label>
+      <label class="campo"><span>Intervalo mínimo entre avisos iguais (s)</span>
+        <input type="number" id="c-cool" min="30" max="3600" step="30">
+      </label>
+      <label class="campo campo-check">
+        <input type="checkbox" id="c-som"><span>Tocar som quando um link cair</span>
+      </label>
+    </div>
+    <div class="config-acoes">
+      <button class="btn btn-primario" id="c-salvar" type="button">Salvar</button>
+      <button class="btn" id="c-testar" type="button">Testar webhook</button>
+      <span id="c-msg" class="muted"></span>
+    </div>
+  </details>
+</section>
+
+<!-- ------------------------------------------------ relatórios e manutenção -->
+<section class="painel">
+  <details id="manutencao">
+    <summary><h2 class="inline">Relatórios e manutenção</h2></summary>
+
+    <div class="acoes-grid">
+
+      <div class="acao">
+        <h3>📄 Relatório em PDF</h3>
+        <p class="painel-sub">Resumo executivo, tabela de métricas, gráfico de latência,
+          linha de disponibilidade e o histórico completo de quedas com duração.</p>
+        <label class="campo"><span>Período do relatório</span>
+          <select id="r-periodo">
+            <option value="1h">Última hora</option>
+            <option value="6h">Últimas 6 horas</option>
+            <option value="24h" selected>Últimas 24 horas</option>
+            <option value="7d">Últimos 7 dias</option>
+            <option value="30d">Últimos 30 dias</option>
+          </select>
+        </label>
+        <button class="btn btn-primario" id="btn-pdf" type="button">Gerar e baixar PDF</button>
+      </div>
+
+      <div class="acao">
+        <h3>💾 Salvar logs</h3>
+        <p class="painel-sub">Baixa um arquivo de diagnóstico: estado atual dos links,
+          configuração, os últimos 50 eventos e o log completo do serviço.</p>
+        <button class="btn" id="btn-logs" type="button">Baixar logs</button>
+      </div>
+
+      <div class="acao acao-perigo">
+        <h3>🗑️ Resetar tudo</h3>
+        <p class="painel-sub">Apaga o histórico de amostras e o registro de quedas.
+          <strong>É irreversível</strong> — baixe o relatório antes se quiser guardar.</p>
+        <label class="campo"><span>O que apagar</span>
+          <select id="r-escopo">
+            <option value="historico">Só o histórico (mantém suas configurações)</option>
+            <option value="tudo">Tudo, incluindo configurações e webhook</option>
+          </select>
+        </label>
+        <button class="btn btn-perigo" id="btn-reset" type="button">Resetar…</button>
+
+        <div class="confirma oculto" id="caixa-confirma">
+          <p>Para confirmar, digite <strong>APAGAR</strong> abaixo:</p>
+          <input type="text" id="r-confirma" placeholder="APAGAR" autocomplete="off" spellcheck="false">
+          <div class="confirma-acoes">
+            <button class="btn btn-perigo" id="btn-reset-ok" type="button" disabled>Apagar definitivamente</button>
+            <button class="btn" id="btn-reset-cancela" type="button">Cancelar</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+    <p id="m-msg" class="muted"></p>
+  </details>
+</section>
+
+<footer class="rodape">
+  <span id="rodape-info">netmon</span>
+</footer>
+
+</main>
+<script src="/app.js"></script>
+</body>
+</html>
