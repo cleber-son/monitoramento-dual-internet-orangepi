@@ -432,6 +432,11 @@ class LinkProbe(threading.Thread):
                 gw_vivo = any(self.gw_hist)
                 cause = ("cabo" if no_link else
                          "roteador_local" if not gw_vivo else "provedor")
+                # queda que comeca durante o teste de velocidade e nossa: num link
+                # de 6 Mbps saturado o ICMP morre. Fica registrada, mas marcada --
+                # e fora do relatorio que vai para a operadora
+                if ts < self.mudo_degradacao_ate and not no_link:
+                    cause = "teste_velocidade"
                 self.state = new_state
                 self.state_since = self.first_fail_ts
                 self.down_event_id = db.open_event(

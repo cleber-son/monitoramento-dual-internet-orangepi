@@ -358,13 +358,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._err(400, "intervalo invalido")
         elif period not in report.PERIODOS:
             return self._err(400, "period invalido")
+        link = (q.get("link") or "").upper() or None
+        if link and link not in report.LINK_ID:
+            return self._err(400, "link deve ser GIGA ou IMPACTO")
         try:
-            blob = report.gerar(period, frm, to)
+            blob = report.gerar(period, frm, to, link)
         except Exception:
             log.exception("falha gerando o relatorio PDF")
             return self._err(500, "falha gerando o relatorio")
         import alerts as _al
-        nome = "relatorio-netmon-%s-%s.pdf" % (
+        nome = "%s-%s-%s.pdf" % (
+            ("quedas-%s" % link.lower()) if link else "relatorio-netmon",
             period, _al.datetime.fromtimestamp(time.time(), _al.TZ).strftime("%Y%m%d-%H%M"))
         self._send(200, blob, "application/pdf", {
             "Content-Disposition": 'attachment; filename="%s"' % nome,
@@ -500,10 +504,15 @@ class Handler(BaseHTTPRequestHandler):
 # Consultas auxiliares
 # ---------------------------------------------------------------------------
 def _downtime(conn, link_id, frm, to, tipo="QUEDA"):
-    """Soma da interseccao dos eventos com a janela; retorna (total, n, maior)."""
+    """Soma da interseccao dos eventos com a janela; retorna (total, n, maior).
+
+    Quedas causadas pelo proprio teste de velocidade ficam de fora: o link caiu
+    porque nos enchemos ele, e contar isso como indisponibilidade seria mentira.
+    """
     rows = conn.execute(
         "SELECT started_at, COALESCE(ended_at, ?) fim FROM events "
-        "WHERE link_id=? AND type=? AND started_at<=? AND COALESCE(ended_at, ?)>=?",
+        "WHERE link_id=? AND type=? AND started_at<=? AND COALESCE(ended_at, ?)>=? "
+        "AND COALESCE(cause,'') <> 'teste_velocidade'",
         (int(time.time()), link_id, tipo, to, int(time.time()), frm)).fetchall()
     total = 0
     maior = 0

@@ -63,13 +63,19 @@ def _serie(link_id, frm, to):
         conn.close()
 
 
-def _eventos(frm, to):
+def _eventos(frm, to, link=None):
     conn = db.connect(readonly=True)
     try:
-        rows = conn.execute(
-            "SELECT e.*, l.name link FROM events e JOIN links l ON l.id=e.link_id "
-            "WHERE e.started_at<=? AND COALESCE(e.ended_at,?)>=? "
-            "ORDER BY e.started_at DESC", (to, int(time.time()), frm)).fetchall()
+        # a queda provocada pelo nosso proprio teste de velocidade nao entra no
+        # relatorio: ele existe para provar falha da operadora, nao a nossa
+        sql = ("SELECT e.*, l.name link FROM events e JOIN links l ON l.id=e.link_id "
+               "WHERE e.started_at<=? AND COALESCE(e.ended_at,?)>=? "
+               "AND COALESCE(e.cause,'') <> 'teste_velocidade' ")
+        params = [to, int(time.time()), frm]
+        if link:
+            sql += "AND l.name=? "
+            params.append(link)
+        rows = conn.execute(sql + "ORDER BY e.started_at DESC", params).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
@@ -84,10 +90,12 @@ def _cabecalho(pag, titulo, sub, pagina, total):
               cor=FRACO, alinhamento="dir")
 
 
-def _rodape(pag):
+def _rodape(pag, link=None):
     y = pdf.A4[1] - 34
     pag.linha(MARGEM, y - 10, pdf.A4[0] - MARGEM, y - 10, GRADE, 0.8)
-    pag.texto(MARGEM, y, "netmon - monitoramento continuo dos links GIGA e IMPACTO", 8, cor=FRACO)
+    # num relatorio de um link so, citar a outra operadora no rodape e ruido
+    assunto = ("do link %s" % link) if link else "dos links GIGA e IMPACTO"
+    pag.texto(MARGEM, y, "netmon - monitoramento continuo %s" % assunto, 8, cor=FRACO)
     pag.texto(pdf.A4[0] - MARGEM, y, "gerado em %s" % _dt(time.time()), 8,
               cor=FRACO, alinhamento="dir")
 
@@ -109,17 +117,17 @@ LINHAS = [
 ]
 
 
-def _tabela_resumo(pag, y, resumos):
+def _tabela_resumo(pag, y, resumos, nomes):
+    """Uma coluna por link. No relatorio de um link so, ela ocupa o lugar da dupla."""
     col_rot = MARGEM
-    col_a = MARGEM + 250
-    col_b = MARGEM + 380
+    colunas = ([(MARGEM + 380, nomes[0])] if len(nomes) == 1
+               else [(MARGEM + 250, nomes[0]), (MARGEM + 380, nomes[1])])
 
     pag.retangulo(MARGEM, y - 4, LARG_UTIL, 22, preenche=(0.965, 0.965, 0.955))
     pag.texto(col_rot + 6, y + 2, "METRICA", 8, negrito=True, cor=FRACO)
-    pag.texto(col_a + 60, y + 2, "GIGA", 9.5, negrito=True, cor=COR["GIGA"],
-              alinhamento="dir")
-    pag.texto(col_b + 60, y + 2, "IMPACTO", 9.5, negrito=True, cor=COR["IMPACTO"],
-              alinhamento="dir")
+    for col, nome in colunas:
+        pag.texto(col + 60, y + 2, nome, 9.5, negrito=True, cor=COR[nome],
+                  alinhamento="dir")
     y += 24
 
     for i, (rot, fn) in enumerate(LINHAS):
@@ -127,7 +135,7 @@ def _tabela_resumo(pag, y, resumos):
             pag.retangulo(MARGEM, y - 3, LARG_UTIL, 17, preenche=(0.984, 0.984, 0.980))
         destaque = rot == "Uptime"
         pag.texto(col_rot + 6, y, rot, 9, negrito=destaque, cor=TINTA2)
-        for col, nome in ((col_a, "GIGA"), (col_b, "IMPACTO")):
+        for col, nome in colunas:
             pag.texto(col + 60, y, fn(resumos[nome]), 9.5, negrito=destaque,
                       cor=TINTA if destaque else TINTA2, alinhamento="dir")
         y += 17
@@ -187,7 +195,7 @@ def _grafico_latencia(pag, y, series, eventos, frm, to, altura=170):
 
     # legenda
     lx = x0
-    for nome in ("GIGA", "IMPACTO"):
+    for nome in series:
         pag.retangulo(lx, y1 + 20, 9, 9, preenche=COR[nome])
         pag.texto(lx + 13, y1 + 20, nome, 8.5, cor=TINTA2)
         lx += 22 + pdf._largura(nome, 8.5)
@@ -197,14 +205,14 @@ def _grafico_latencia(pag, y, series, eventos, frm, to, altura=170):
     return y1 + 40
 
 
-def _timeline(pag, y, series, eventos, frm, to):
+def _timeline(pag, y, series, eventos, frm, to, nomes=("GIGA", "IMPACTO")):
     pag.texto(MARGEM, y, "Disponibilidade", 10.5, negrito=True, cor=TINTA)
     y += 16
     N = 80
     passo = (to - frm) / N
     larg = LARG_UTIL / N
 
-    for nome in ("GIGA", "IMPACTO"):
+    for nome in nomes:
         pag.texto(MARGEM, y, nome, 8.5, negrito=True, cor=COR[nome])
         evs = [e for e in eventos if e["link"] == nome]
         cobertos = set()
@@ -223,7 +231,7 @@ def _timeline(pag, y, series, eventos, frm, to):
     return y
 
 
-def _tabela_eventos(doc, eventos, titulo_sub, pagina_ini, total_paginas):
+def _tabela_eventos(doc, eventos, titulo_sub, pagina_ini, total_paginas, link=None):
     """Devolve a lista de paginas geradas (pode ser mais de uma)."""
     cols = [(MARGEM, "LINK", "esq"), (MARGEM + 72, "TIPO", "esq"),
             (MARGEM + 168, "INICIO", "esq"), (MARGEM + 288, "FIM", "esq"),
@@ -241,7 +249,7 @@ def _tabela_eventos(doc, eventos, titulo_sub, pagina_ini, total_paginas):
         if not eventos:
             pag.texto(MARGEM, y, "Nenhuma queda ou alerta registrado no periodo.",
                       10, cor=TINTA2)
-            _rodape(pag)
+            _rodape(pag, link)
             break
 
         pag.retangulo(MARGEM, y - 4, LARG_UTIL, 20, preenche=(0.965, 0.965, 0.955))
@@ -273,7 +281,7 @@ def _tabela_eventos(doc, eventos, titulo_sub, pagina_ini, total_paginas):
             idx += 1
             nesta_pagina += 1
 
-        _rodape(pag)
+        _rodape(pag, link)
         n_pag += 1
         if idx >= len(eventos):
             break
@@ -281,48 +289,97 @@ def _tabela_eventos(doc, eventos, titulo_sub, pagina_ini, total_paginas):
 
 
 # ---------------------------------------------------------------------------
-def gerar(period="24h", frm=None, to=None):
+LINK_ID = {"GIGA": 1, "IMPACTO": 2}
+
+
+def _caixa_prova(pag, y, nome, r, eventos):
+    """O quadro que a operadora vai ler primeiro: quantas quedas e quando."""
+    quedas = [e for e in eventos if e["type"] == "QUEDA"]
+    altura = 62
+    pag.retangulo(MARGEM, y, LARG_UTIL, altura, preenche=(0.975, 0.975, 0.968),
+                  borda=GRADE, espessura=0.8)
+    pag.retangulo(MARGEM, y, 4, altura, preenche=COR[nome])
+
+    if not quedas:
+        pag.texto(MARGEM + 16, y + 20, "Nenhuma queda registrada no periodo.", 12,
+                  negrito=True, cor=BOM)
+        pag.texto(MARGEM + 16, y + 40,
+                  "Monitoramento ativo a cada %d segundos, cobertura de %s do periodo."
+                  % (db.SAMPLE_INTERVAL, _n(r["cobertura_pct"], 1, "%")), 9, cor=TINTA2)
+        return y + altura + 18
+
+    pag.texto(MARGEM + 16, y + 20, "%d queda(s) do link %s no periodo"
+              % (r["quedas"], nome), 12, negrito=True, cor=CRITICO)
+    pag.texto(MARGEM + 16, y + 40,
+              "Tempo total fora do ar: %s   |   Maior queda: %s   |   Disponibilidade: %s"
+              % (alerts.fmt_dur(r["downtime_s"]), alerts.fmt_dur(r["maior_queda_s"]),
+                 _n(r["uptime_pct"], 3, "%")), 9.5, cor=TINTA2)
+    ultima = quedas[0]
+    pag.texto(pdf.A4[0] - MARGEM - 16, y + 40,
+              "Ultima queda: %s" % _dt(ultima["started_at"]), 9.5, cor=TINTA2,
+              alinhamento="dir")
+    return y + altura + 18
+
+
+def gerar(period="24h", frm=None, to=None, link=None):
     import server
     agora = int(time.time())
     if frm is None or to is None:
         span = PERIODOS.get(period, 86400)
         to, frm = agora, agora - span
     rotulo = NOME_PERIODO.get(period, "periodo personalizado")
+    nomes = [link] if link else ["GIGA", "IMPACTO"]
 
-    resumos = {n: server.resumo_link(i, frm, to) for i, n in ((1, "GIGA"), (2, "IMPACTO"))}
-    eventos = _eventos(frm, to)
-    series = {n: _serie(i, frm, to) for i, n in ((1, "GIGA"), (2, "IMPACTO"))}
+    resumos = {n: server.resumo_link(LINK_ID[n], frm, to) for n in nomes}
+    eventos = _eventos(frm, to, link)
+    series = {n: _serie(LINK_ID[n], frm, to) for n in nomes}
 
     # mesma aritmetica que _tabela_eventos usa para quebrar as paginas
     total_pag = 1 + max(1, -(-len(eventos) // LINHAS_POR_PAGINA))
 
-    doc = pdf.PDF(titulo="Relatorio netmon - %s" % rotulo)
+    if link:
+        titulo = "Relatorio de Quedas - Link %s" % link
+        doc_titulo = "Relatorio de quedas %s - %s" % (link, rotulo)
+    else:
+        titulo = "Relatorio de Monitoramento de Internet"
+        doc_titulo = "Relatorio netmon - %s" % rotulo
+
+    doc = pdf.PDF(titulo=doc_titulo)
     sub = "%s  |  de %s ate %s" % (rotulo.capitalize(), _dt(frm), _dt(to))
 
     pag = doc.nova_pagina()
-    _cabecalho(pag, "Relatorio de Monitoramento de Internet", sub, 1, total_pag)
+    _cabecalho(pag, titulo, sub, 1, total_pag)
 
-    # resumo executivo em uma frase por link
     y = 100
-    for nome in ("GIGA", "IMPACTO"):
-        r = resumos[nome]
-        if r["uptime_pct"] is None:
-            frase = "%s: sem dados suficientes no periodo." % nome
-        elif r["quedas"] == 0:
-            frase = ("%s: nenhuma queda. Uptime de %s, latencia media de %s."
-                     % (nome, _n(r["uptime_pct"], 3, "%"), _n(r["rtt_avg"], 2, " ms")))
-        else:
-            frase = ("%s: %d queda(s), %s fora do ar no total (maior: %s). Uptime de %s."
-                     % (nome, r["quedas"], alerts.fmt_dur(r["downtime_s"]),
-                        alerts.fmt_dur(r["maior_queda_s"]), _n(r["uptime_pct"], 3, "%")))
-        pag.retangulo(MARGEM, y - 4, 3, 15, preenche=COR[nome])
-        pag.texto(MARGEM + 10, y, frase, 9.5, cor=TINTA2)
-        y += 20
+    if link:
+        # relatorio de um link so: o veredito vem antes de qualquer tabela
+        y = _caixa_prova(pag, y - 6, link, resumos[link], eventos)
+    else:
+        # resumo executivo em uma frase por link
+        for nome in nomes:
+            r = resumos[nome]
+            if r["uptime_pct"] is None:
+                frase = "%s: sem dados suficientes no periodo." % nome
+            elif r["quedas"] == 0:
+                frase = ("%s: nenhuma queda. Uptime de %s, latencia media de %s."
+                         % (nome, _n(r["uptime_pct"], 3, "%"), _n(r["rtt_avg"], 2, " ms")))
+            else:
+                frase = ("%s: %d queda(s), %s fora do ar no total (maior: %s). Uptime de %s."
+                         % (nome, r["quedas"], alerts.fmt_dur(r["downtime_s"]),
+                            alerts.fmt_dur(r["maior_queda_s"]), _n(r["uptime_pct"], 3, "%")))
+            pag.retangulo(MARGEM, y - 4, 3, 15, preenche=COR[nome])
+            pag.texto(MARGEM + 10, y, frase, 9.5, cor=TINTA2)
+            y += 20
 
-    y = _tabela_resumo(pag, y + 10, resumos)
+    y = _tabela_resumo(pag, y + 10, resumos, nomes)
     y = _grafico_latencia(pag, y + 26, series, eventos, frm, to)
-    _timeline(pag, y + 6, series, eventos, frm, to)
-    _rodape(pag)
+    y = _timeline(pag, y + 6, series, eventos, frm, to, nomes)
+    if link:
+        pag.texto(MARGEM, y + 6,
+                  "Medicao feita na interface do link %s, a cada %d segundos, por sonda"
+                  " ICMP com dois alvos independentes." % (link, db.SAMPLE_INTERVAL),
+                  8.5, cor=FRACO)
+    _rodape(pag, link)
 
-    _tabela_eventos(doc, eventos, sub, 2, total_pag)
+    _tabela_eventos(doc, eventos, sub, 2, total_pag, link)
     return doc.bytes()

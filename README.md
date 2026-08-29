@@ -64,7 +64,7 @@ Trocar o cabo de lugar não quebra nada: IP e gateway são redetectados a cada
 | 🟡 **Separa "caiu o provedor" de "caiu o roteador"** | pinga o gateway em paralelo; se ele responde e a internet não, a culpa é de lá |
 | 🚀 **Testa a velocidade de cada link** | download e upload reais, um botão por internet |
 | 📈 **Guarda 5 anos de histórico** | amostras de 2 s por 48 h, minuto por 90 dias, hora por 5 anos — e estabiliza abaixo de 70 MB |
-| 📄 **Gera PDF** | escrito à mão em Python puro: não há reportlab nem navegador headless neste aparelho |
+| 📄 **Gera o PDF da prova** | um botão por internet: hora exata de cada queda, duração e causa, para mandar à operadora. Escrito à mão em Python puro — não há reportlab nem navegador headless neste aparelho |
 | 🔔 **Avisa no Discord/Slack** | webhook traduzido conforme o destino, e enviado **pelo outro link** se o principal estiver caído |
 | 🔊 **Grita na página** | banner, som e notificação do navegador |
 
@@ -120,7 +120,10 @@ Um botão por internet. Download e upload reais, com o soquete preso à interfac
 - O nome do servidor é resolvido por **DNS preso à interface** — senão testar o
   link secundário com o principal caído falharia logo na resolução.
 - Enquanto o teste roda, o alerta de latência alta **daquele link** fica
-  suspenso: o link está cheio por nossa conta. A detecção de **queda** continua.
+  suspenso: o link está cheio por nossa conta. A queda continua sendo detectada,
+  mas se acontecer durante o teste ela é marcada como `teste_velocidade` e fica
+  **fora do relatório da operadora** — num link de 6 Mbps saturado o ICMP morre,
+  e isso é culpa nossa, não dela.
 
 ## Quando dispara alerta
 
@@ -198,7 +201,7 @@ página avisa no rodapé.
 | `GET /api/config` · `POST /api/config` | limiares, webhook, som |
 | `POST /api/webhook/test` | dispara um payload de teste |
 | `GET /api/stream` | SSE ao vivo (`status` a cada 2 s, `alerta` na hora) |
-| `GET /api/report.pdf?period=24h` | relatório em PDF |
+| `GET /api/report.pdf?period=24h&link=GIGA` | relatório em PDF; com `link`, só as quedas daquele link |
 | `GET /api/logs` | pacote de diagnóstico |
 | `POST /api/reset` | apaga o histórico — exige `{"confirmar":"APAGAR"}` |
 

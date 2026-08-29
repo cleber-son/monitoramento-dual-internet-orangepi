@@ -208,9 +208,10 @@
     <div class="acoes-grid">
 
       <div class="acao">
-        <h3>📄 Relatório em PDF</h3>
-        <p class="painel-sub">Resumo executivo, tabela de métricas, gráfico de latência,
-          linha de disponibilidade e o histórico completo de quedas com duração.</p>
+        <h3>📄 Relatório de quedas em PDF</h3>
+        <p class="painel-sub">Para mandar para a operadora: hora exata de cada queda,
+          duração, causa provável, gráfico de latência e a disponibilidade do período.
+          <strong>Um botão por internet</strong> — o PDF sai só com aquele link.</p>
         <label class="campo"><span>Período do relatório</span>
           <select id="r-periodo">
             <option value="1h">Última hora</option>
@@ -220,7 +221,13 @@
             <option value="30d">Últimos 30 dias</option>
           </select>
         </label>
-        <button class="btn btn-primario" id="btn-pdf" type="button">Gerar e baixar PDF</button>
+        <div class="acao-botoes">
+          <button class="btn btn-primario btn-pdf-link" id="btn-pdf-giga" type="button"
+                  data-link="GIGA">📄 Quedas da GIGA</button>
+          <button class="btn btn-primario btn-pdf-link" id="btn-pdf-impacto" type="button"
+                  data-link="IMPACTO">📄 Quedas da IMPACTO</button>
+          <button class="btn" id="btn-pdf" type="button">Relatório dos dois links</button>
+        </div>
       </div>
 
       <div class="acao">

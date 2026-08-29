@@ -438,6 +438,8 @@ details[open] summary::before { content: "▾ "; }
 .acao h3 { font-size: 0.94rem; font-weight: 640; }
 .acao .painel-sub { flex: 1; }
 .acao .btn { align-self: flex-start; }
+.acao-botoes { display: flex; flex-wrap: wrap; gap: 8px; }
+.acao-botoes .btn { align-self: auto; }
 .acao-perigo { border-color: rgba(208, 59, 59, .35); }
 
 .btn-perigo { background: #4a1717; border-color: rgba(208,59,59,.6); color: #ffb3b3; }

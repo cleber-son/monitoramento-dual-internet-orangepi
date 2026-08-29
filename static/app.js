@@ -9,6 +9,7 @@ const CAUSA = {
   provedor: 'provável queda do provedor',
   roteador_local: 'roteador local não responde',
   cabo: 'sem link físico — verifique o cabo',
+  teste_velocidade: 'link saturado pelo teste de velocidade (não conta contra a operadora)',
 };
 
 const estado = {
@@ -81,6 +82,15 @@ function svgEl(tag, attrs) {
 }
 function limpar(no) { while (no.firstChild) no.removeChild(no.firstChild); }
 
+/* Mede o SVG pela caixa real. `clientWidth` arredonda e vale 0 enquanto o
+   layout não assentou — e um viewBox medido errado desenha o gráfico em escala
+   errada, ocupando só um pedaço do quadro. */
+function medir(svg, wPadrao, hPadrao) {
+  const r = svg.getBoundingClientRect();
+  return { W: Math.round(r.width) || svg.clientWidth || wPadrao,
+           H: Math.round(r.height) || svg.clientHeight || hPadrao };
+}
+
 /* ------------------------------------------------------------ cards */
 function renderCards(links) {
   const box = $('cards');
@@ -131,7 +141,7 @@ function renderCards(links) {
 function desenharSpark(nome, pontos) {
   const svg = document.querySelector(`[data-spark="${nome}"]`);
   if (!svg) return;
-  const w = svg.clientWidth || 300, h = svg.clientHeight || 44;
+  const { W: w, H: h } = medir(svg, 300, 44);
   limpar(svg);
   svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
   const vals = pontos.filter((p) => p[1] !== null);
@@ -210,7 +220,7 @@ function faixaSemDados(svg, series, X, M, ih, t0, t1, comTexto) {
 /* ------------------------------------------------------------ latência */
 function desenharLatencia(series, eventos, t0, t1) {
   const svg = $('g-lat');
-  const W = svg.clientWidth || 900, H = svg.clientHeight || 280;
+  const { W, H } = medir(svg, 900, 280);
   const M = { t: 12, r: 14, b: 26, l: W < 420 ? 36 : 48 };   // eixo mais enxuto no celular
   limpar(svg);
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
@@ -288,7 +298,7 @@ function desenharLatencia(series, eventos, t0, t1) {
 /* ------------------------------------------------------------ perda */
 function desenharPerda(series, t0, t1) {
   const svg = $('g-perda');
-  const W = svg.clientWidth || 900, H = svg.clientHeight || 150;
+  const { W, H } = medir(svg, 900, 150);
   const M = { t: 10, r: 14, b: 24, l: W < 420 ? 36 : 48 };
   limpar(svg);
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
@@ -425,6 +435,18 @@ async function pegar(url) {
   return r.json();
 }
 
+/* Redesenha do cache, sem ir à rede. Serve para o ResizeObserver: se a primeira
+   pintura pegou o quadro com o tamanho errado, a segunda conserta sozinha. */
+function redesenhar() {
+  const g = estado.ultimoGrafico;
+  if (!g) return;
+  desenharLatencia(g.series, g.eventos, g.t0, g.t1);
+  desenharPerda(g.series, g.t0, g.t1);
+  desenharTimeline(g.series, g.eventos, g.t0, g.t1);
+  desenharSpark('GIGA', (g.series.GIGA || []).slice(-180));
+  desenharSpark('IMPACTO', (g.series.IMPACTO || []).slice(-180));
+}
+
 async function carregarGraficos() {
   const t1 = Math.floor(Date.now() / 1000);
   const t0 = t1 - estado.span;
@@ -436,11 +458,8 @@ async function carregarGraficos() {
     ]);
     const series = { GIGA: g.points, IMPACTO: i.points };
     estado.serieAtual = series;
-    desenharLatencia(series, ev.events, t0, t1);
-    desenharPerda(series, t0, t1);
-    desenharTimeline(series, ev.events, t0, t1);
-    desenharSpark('GIGA', g.points.slice(-180));
-    desenharSpark('IMPACTO', i.points.slice(-180));
+    estado.ultimoGrafico = { series, eventos: ev.events, t0, t1 };
+    redesenhar();
   } catch (e) {
     console.error('falha carregando gráficos', e);
   }
@@ -1045,6 +1064,14 @@ function ligarEventos() {
   $('btn-pdf').addEventListener('click', (ev) =>
     baixar('/api/report.pdf?period=' + $('r-periodo').value,
            'relatorio-netmon.pdf', 'Relatório', ev.currentTarget));
+  document.querySelectorAll('.btn-pdf-link').forEach((b) => {
+    b.addEventListener('click', (ev) => {
+      const link = ev.currentTarget.dataset.link;
+      const per = $('r-periodo').value;
+      baixar(`/api/report.pdf?period=${per}&link=${link}`,
+             `quedas-${link.toLowerCase()}.pdf`, `Relatório da ${link}`, ev.currentTarget);
+    });
+  });
   $('btn-logs').addEventListener('click', (ev) =>
     baixar('/api/logs', 'netmon.log', 'Log', ev.currentTarget));
 
@@ -1069,6 +1096,16 @@ function ligarEventos() {
     clearTimeout(redraw);
     redraw = setTimeout(carregarGraficos, 250);
   });
+
+  // a caixa do gráfico pode mudar sem a janela mudar (fonte carregando, barra de
+  // rolagem aparecendo, painel abrindo). Aí o desenho antigo fica em escala errada
+  if ('ResizeObserver' in window) {
+    const obs = new ResizeObserver(() => {
+      clearTimeout(estado.timers.redesenho);
+      estado.timers.redesenho = setTimeout(redesenhar, 80);
+    });
+    ['wrap-lat', 'wrap-perda'].forEach((id) => obs.observe($(id)));
+  }
 
   if ('Notification' in window && Notification.permission === 'granted') {
     $('btn-notif').textContent = '🔔 notificações ativas';
