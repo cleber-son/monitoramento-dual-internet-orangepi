@@ -23,7 +23,7 @@
 <header class="topo">
   <div class="topo-titulo">
     <h1>Monitor de Internet</h1>
-    <p class="sub">GIGA e IMPACTO · sondagem contínua a cada 2&nbsp;s</p>
+    <p class="sub">GIGA, IMPACTO e latência até o roteador · sondagem contínua a cada 2&nbsp;s</p>
   </div>
   <div class="topo-meta">
     <span id="conexao" class="pill pill-off">conectando…</span>
@@ -36,6 +36,75 @@
 
 <!-- ------------------------------------------------ cards de status -->
 <section class="cards" id="cards" aria-label="Estado atual dos links"></section>
+
+<!-- ------------------------------------------------ latência -->
+<section class="painel">
+  <div class="painel-topo">
+    <div>
+      <h2>Latência</h2>
+      <p class="painel-sub">Tempo de resposta até a internet. A linha do ROTEADOR mede
+        só até a sua rede local — quando ela sobe junto com as outras, o problema é
+        aqui dentro. Faixa clara = mínimo–máximo do período.</p>
+    </div>
+    <div class="periodos" id="periodos" role="group" aria-label="Período">
+      <button class="btn-per" data-span="30">30s</button>
+      <button class="btn-per" data-span="60">1min</button>
+      <button class="btn-per" data-span="3600">1h</button>
+      <button class="btn-per" data-span="21600">6h</button>
+      <button class="btn-per ativo" data-span="86400">24h</button>
+      <button class="btn-per" data-span="604800">7d</button>
+      <button class="btn-per" data-span="2592000">30d</button>
+    </div>
+  </div>
+  <div class="legenda" id="legenda"></div>
+  <div class="grafico-wrap" id="wrap-lat">
+    <svg id="g-lat" class="grafico" role="img" aria-label="Gráfico de latência"></svg>
+    <div class="tooltip oculto" id="tt-lat"></div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------ perda -->
+<section class="painel">
+  <h2>Perda de pacotes</h2>
+  <p class="painel-sub">Percentual de pacotes sem resposta em cada intervalo, uma barra por link.</p>
+  <div class="grafico-wrap" id="wrap-perda">
+    <svg id="g-perda" class="grafico grafico-baixo" role="img" aria-label="Gráfico de perda de pacotes"></svg>
+    <div class="tooltip oculto" id="tt-perda"></div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------ estatísticas -->
+<section class="painel">
+  <h2>Estatísticas do período</h2>
+  <p class="painel-sub" id="resumo-sub">—</p>
+  <div class="tabela-wrap">
+    <table class="tabela tabela-resumo" id="tab-resumo">
+      <thead><tr id="resumo-cab"><th scope="col">Métrica</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="legenda legenda-qualidade">
+    <span class="leg"><span class="chip q-bom">✔</span>dentro do esperado</span>
+    <span class="leg"><span class="chip q-medio">!</span>atenção</span>
+    <span class="leg"><span class="chip q-ruim">✕</span>fora do aceitável</span>
+    <span class="leg"><span class="chip q-neutro">–</span>sem julgamento</span>
+    <span class="leg"><span class="pill-melhor">melhor</span>o melhor entre os links de internet
+      (o ROTEADOR fica de fora da comparação: é rede local)</span>
+  </div>
+</section>
+
+<!-- ------------------------------------------------ disponibilidade -->
+<section class="painel">
+  <h2>Linha do tempo de disponibilidade</h2>
+  <p class="painel-sub">Cada barra é um intervalo do período. Passe o mouse para ver o detalhe.</p>
+  <div id="timelines"></div>
+  <div class="legenda legenda-status">
+    <span class="leg"><i class="sw" style="background:var(--good)"></i>no ar</span>
+    <span class="leg"><i class="sw" style="background:var(--warning)"></i>degradado</span>
+    <span class="leg"><i class="sw" style="background:var(--critical)"></i>fora do ar</span>
+    <span class="leg"><i class="sw" style="background:var(--sem-dado)"></i>sem dados</span>
+  </div>
+</section>
 
 <!-- ------------------------------------------------ teste de velocidade -->
 <section class="painel">
@@ -56,76 +125,34 @@
   </div>
   <div class="vel-grid" id="vel-grid"></div>
   <p id="v-msg" class="muted"></p>
-</section>
 
-<!-- ------------------------------------------------ latência -->
-<section class="painel">
-  <div class="painel-topo">
-    <div>
-      <h2>Latência</h2>
-      <p class="painel-sub">Tempo de resposta até a internet. Faixa clara = mínimo–máximo do período.</p>
+  <div class="vel-log">
+    <div class="painel-topo">
+      <div>
+        <h3>Log dos testes de velocidade</h3>
+        <p class="painel-sub">Todo teste já feito, com a hora, o servidor usado e o erro
+          quando houve. Serve de prova junto à operadora: mostra a velocidade real
+          medida em cada horário.</p>
+      </div>
+      <div class="filtros">
+        <label class="campo"><span>Link</span>
+          <select id="f-vel-link"><option value="">Todos</option></select>
+        </label>
+        <button class="btn" id="btn-vel-csv" type="button">⬇️ Baixar CSV</button>
+      </div>
     </div>
-    <div class="periodos" id="periodos" role="group" aria-label="Período">
-      <button class="btn-per" data-span="30">30s</button>
-      <button class="btn-per" data-span="60">1min</button>
-      <button class="btn-per" data-span="3600">1h</button>
-      <button class="btn-per" data-span="21600">6h</button>
-      <button class="btn-per ativo" data-span="86400">24h</button>
-      <button class="btn-per" data-span="604800">7d</button>
-      <button class="btn-per" data-span="2592000">30d</button>
+    <div class="tabela-wrap wrap-vellog">
+      <table class="tabela" id="tab-vel">
+        <thead><tr>
+          <th scope="col">Quando</th><th scope="col">Link</th>
+          <th scope="col">↓ Download</th><th scope="col">↑ Upload</th>
+          <th scope="col">Ping</th><th scope="col">Jitter</th>
+          <th scope="col">Servidor</th><th scope="col">Observação</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
     </div>
-  </div>
-  <div class="legenda" id="legenda">
-    <span class="leg"><i class="sw" style="background:var(--giga)"></i>GIGA</span>
-    <span class="leg"><i class="sw" style="background:var(--impacto)"></i>IMPACTO</span>
-    <span class="leg"><i class="sw sw-queda"></i>faixa de queda</span>
-    <span class="leg"><i class="sw" style="background:var(--sem-dado)"></i>sem monitoramento</span>
-  </div>
-  <div class="grafico-wrap" id="wrap-lat">
-    <svg id="g-lat" class="grafico" role="img" aria-label="Gráfico de latência"></svg>
-    <div class="tooltip oculto" id="tt-lat"></div>
-  </div>
-</section>
-
-<!-- ------------------------------------------------ perda -->
-<section class="painel">
-  <h2>Perda de pacotes</h2>
-  <p class="painel-sub">Percentual de pacotes sem resposta em cada intervalo.</p>
-  <div class="grafico-wrap" id="wrap-perda">
-    <svg id="g-perda" class="grafico grafico-baixo" role="img" aria-label="Gráfico de perda de pacotes"></svg>
-    <div class="tooltip oculto" id="tt-perda"></div>
-  </div>
-</section>
-
-<!-- ------------------------------------------------ disponibilidade -->
-<section class="painel">
-  <h2>Linha do tempo de disponibilidade</h2>
-  <p class="painel-sub">Cada barra é um intervalo do período. Passe o mouse para ver o detalhe.</p>
-  <div id="timelines"></div>
-  <div class="legenda legenda-status">
-    <span class="leg"><i class="sw" style="background:var(--good)"></i>no ar</span>
-    <span class="leg"><i class="sw" style="background:var(--warning)"></i>degradado</span>
-    <span class="leg"><i class="sw" style="background:var(--critical)"></i>fora do ar</span>
-    <span class="leg"><i class="sw" style="background:var(--sem-dado)"></i>sem dados</span>
-  </div>
-</section>
-
-<!-- ------------------------------------------------ estatísticas -->
-<section class="painel">
-  <h2>Estatísticas do período</h2>
-  <p class="painel-sub" id="resumo-sub">—</p>
-  <div class="tabela-wrap">
-    <table class="tabela tabela-resumo" id="tab-resumo">
-      <thead><tr><th scope="col">Métrica</th><th scope="col">GIGA</th><th scope="col">IMPACTO</th></tr></thead>
-      <tbody></tbody>
-    </table>
-  </div>
-  <div class="legenda legenda-qualidade">
-    <span class="leg"><span class="chip q-bom">✔</span>dentro do esperado</span>
-    <span class="leg"><span class="chip q-medio">!</span>atenção</span>
-    <span class="leg"><span class="chip q-ruim">✕</span>fora do aceitável</span>
-    <span class="leg"><span class="chip q-neutro">–</span>sem julgamento</span>
-    <span class="leg"><span class="pill-melhor">melhor</span>o melhor dos dois links na métrica</span>
+    <p id="vel-log-info" class="muted">—</p>
   </div>
 </section>
 
@@ -138,7 +165,7 @@
     </div>
     <div class="filtros">
       <label class="campo"><span>Link</span>
-        <select id="f-link"><option value="">Todos</option><option>GIGA</option><option>IMPACTO</option></select>
+        <select id="f-link"><option value="">Todos</option></select>
       </label>
       <label class="campo"><span>Tipo</span>
         <select id="f-tipo">
@@ -169,6 +196,18 @@
 <section class="painel">
   <details id="config">
     <summary><h2 class="inline">Configurações e alertas</h2></summary>
+    <h3 class="config-titulo">Placas de rede</h3>
+    <p class="painel-sub">Qual placa cada link usa. Troque aqui quando substituir o
+      adaptador USB por outro modelo — vale na hora, sem reiniciar o serviço, e o
+      histórico do link continua o mesmo.</p>
+    <div class="ifaces-grid" id="ifaces-grid"></div>
+    <div class="config-acoes">
+      <button class="btn btn-primario" id="c-salvar-ifaces" type="button">Salvar placas de rede</button>
+      <button class="btn" id="c-recarregar-ifaces" type="button">Reler placas do sistema</button>
+      <span id="c-if-msg" class="muted"></span>
+    </div>
+
+    <h3 class="config-titulo">Alertas</h3>
     <div class="config-grid">
       <label class="campo campo-largo"><span>URL do webhook (Discord, Slack, n8n, Home Assistant…)</span>
         <input type="url" id="c-webhook" placeholder="https://…" autocomplete="off">

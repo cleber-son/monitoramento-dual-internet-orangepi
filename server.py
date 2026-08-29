@@ -5,6 +5,7 @@ import logging
 import mimetypes
 import os
 import queue
+import re
 import socket
 import socketserver
 import threading
@@ -89,8 +90,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self.api_summary()
             if path == "/api/speedtest":
                 return self.api_speedtest_get()
+            if path == "/api/speedtest.csv":
+                return self.api_speedtest_csv()
             if path == "/api/config":
                 return self._json(db.get_config())
+            if path == "/api/links":
+                return self.api_links_get()
+            if path == "/api/ifaces":
+                return self._json({"ifaces": listar_ifaces()})
             if path == "/api/health":
                 return self._json({
                     "ok": True, "pid": os.getpid(),
@@ -127,6 +134,8 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/config":
                 return self.api_config_post(data)
+            if path == "/api/links":
+                return self.api_links_post(data)
             if path == "/api/reset":
                 return self.api_reset(data)
             if path == "/api/speedtest":
@@ -168,9 +177,11 @@ class Handler(BaseHTTPRequestHandler):
     def api_samples(self):
         q = self._query()
         name = (q.get("link") or "").upper()
-        link_id = {"GIGA": 1, "IMPACTO": 2}.get(name)
+        mapa = db.link_ids()
+        link_id = mapa.get(name)
         if not link_id:
-            return self._err(400, "parametro link deve ser GIGA ou IMPACTO")
+            return self._err(400, "parametro link deve ser um de: %s"
+                             % ", ".join(sorted(mapa)))
         now = int(time.time())
         try:
             to = int(q.get("to") or now)
@@ -223,9 +234,10 @@ class Handler(BaseHTTPRequestHandler):
         q = self._query()
         where, params = ["1=1"], []
         name = (q.get("link") or "").upper()
-        if name in ("GIGA", "IMPACTO"):
+        mapa = db.link_ids()
+        if name in mapa:
             where.append("e.link_id=?")
-            params.append(1 if name == "GIGA" else 2)
+            params.append(mapa[name])
         if q.get("tipo"):
             where.append("e.type=?")
             params.append(q["tipo"])
@@ -282,8 +294,8 @@ class Handler(BaseHTTPRequestHandler):
             to, frm = now, now - spans[period]
 
         out = {}
-        for link_id, name in ((1, "GIGA"), (2, "IMPACTO")):
-            out[name] = resumo_link(link_id, frm, to)
+        for l in db.list_links():
+            out[l["name"]] = resumo_link(l["id"], frm, to)
         self._json({"period": period, "from": frm, "to": to, "links": out})
 
     def api_config_post(self, data):
@@ -317,9 +329,9 @@ class Handler(BaseHTTPRequestHandler):
     def api_speedtest_get(self):
         q = self._query()
         name = (q.get("link") or "").upper()
-        link_id = {"GIGA": 1, "IMPACTO": 2}.get(name)
+        link_id = db.link_ids().get(name)
         try:
-            limit = min(100, max(1, int(q.get("limit") or 20)))
+            limit = min(500, max(1, int(q.get("limit") or 20)))
         except ValueError:
             return self._err(400, "limit invalido")
         self._json({
@@ -330,8 +342,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_speedtest_post(self, data):
         name = str(data.get("link") or "").upper()
-        if name not in [p.name_link for p in self.app["probes"]]:
-            return self._err(400, "informe link=GIGA ou link=IMPACTO")
+        # so links de internet: medir a velocidade ate o proprio roteador
+        # mediria o cabo de casa, nao a contratacao
+        aceitos = [p.name_link for p in self.app["probes"] if p.kind == "internet"]
+        if name not in aceitos:
+            return self._err(400, "informe link=%s" % " ou link=".join(aceitos))
         try:
             dur = float(data.get("dur") or speedtest.DUR_PADRAO)
         except (TypeError, ValueError):
@@ -342,6 +357,101 @@ class Handler(BaseHTTPRequestHandler):
             return self._err(409, str(exc))
         self._json({"ok": True, "link": name, "dur": dur,
                     "mensagem": "teste iniciado; acompanhe pelo /api/stream"}, 202)
+
+    # -- log dos testes de velocidade -------------------------------------
+    def api_speedtest_csv(self):
+        """O historico inteiro em CSV, para abrir no LibreOffice/Excel."""
+        q = self._query()
+        link_id = db.link_ids().get((q.get("link") or "").upper())
+        linhas = ["quando;link;download_mbps;upload_mbps;ping_ms;jitter_ms;"
+                  "bytes_baixados;bytes_enviados;seg_download;seg_upload;servidor;erro"]
+        import alerts as _al
+        for t in db.list_speedtests(link_id, 5000):
+            linhas.append(";".join(str(x) for x in [
+                _al.fmt_iso(t["ts"]), t["link"],
+                _num(t["down_mbps"]), _num(t["up_mbps"]),
+                _num(t["ping_ms"]), _num(t["jitter_ms"]),
+                t["bytes_down"] or "", t["bytes_up"] or "",
+                _num(t["dur_down"]), _num(t["dur_up"]),
+                t["servidor"] or "", (t["erro"] or "").replace(";", ","),
+            ]))
+        # BOM: sem ele o Excel abre "GIGA" certo mas estraga os acentos do erro
+        body = ("\ufeff" + "\r\n".join(linhas) + "\r\n").encode("utf-8")
+        nome = "testes-velocidade-%s.csv" % _al.datetime.fromtimestamp(
+            time.time(), _al.TZ).strftime("%Y%m%d-%H%M")
+        self._send(200, body, "text/csv; charset=utf-8", {
+            "Content-Disposition": 'attachment; filename="%s"' % nome,
+            "Cache-Control": "no-store",
+        })
+
+    # -- interfaces e links -----------------------------------------------
+    def api_links_get(self):
+        emuso = {}
+        for p in self.app["probes"]:
+            emuso[p.name_link] = p.iface
+        links = []
+        for l in db.list_links(apenas_ativos=False):
+            l["iface_ativa"] = emuso.get(l["name"], l["iface"])
+            links.append(l)
+        self._json({"links": links, "ifaces": listar_ifaces()})
+
+    def api_links_post(self, data):
+        """Troca a placa de rede (e o alvo, no link de LAN) de um link.
+
+        Vale ao vivo: a sonda passa a usar a interface nova no ciclo seguinte,
+        sem reiniciar o servico.
+        """
+        atuais = {l["name"]: l for l in db.list_links(apenas_ativos=False)}
+        pedidos = data.get("links")
+        if not isinstance(pedidos, dict) or not pedidos:
+            return self._err(400, "envie {\"links\": {\"GIGA\": {\"iface\": \"eth0\"}}}")
+
+        disponiveis = {i["iface"] for i in listar_ifaces()}
+        mudancas = {}
+        for nome, cfg in pedidos.items():
+            nome = str(nome).upper()
+            if nome not in atuais:
+                return self._err(400, "link desconhecido: %s" % nome)
+            if not isinstance(cfg, dict):
+                return self._err(400, "configuracao invalida para %s" % nome)
+            iface = str(cfg.get("iface") or atuais[nome]["iface"]).strip()
+            if not RE_IFACE.match(iface):
+                return self._err(400, "nome de interface invalido: %s" % iface)
+            # avisar, nao impedir: a placa pode estar desconectada agora e voltar
+            # depois, e travar a escolha deixaria o usuario sem saida
+            alvo = cfg.get("target")
+            if alvo is not None:
+                alvo = str(alvo).strip()
+                if alvo and not RE_IPV4.match(alvo):
+                    return self._err(400, "alvo invalido para %s: %s" % (nome, alvo))
+                if atuais[nome]["kind"] != "lan":
+                    alvo = None          # so o link de LAN tem alvo escolhivel
+            mudancas[nome] = (atuais[nome]["id"], iface, alvo)
+
+        usadas = {}
+        for nome, l in atuais.items():
+            iface = mudancas[nome][1] if nome in mudancas else l["iface"]
+            usadas.setdefault(iface, []).append(nome)
+        repetidas = [i for i, ns in usadas.items() if len(ns) > 1]
+        if repetidas:
+            return self._err(400, "a interface %s ficaria em dois links (%s) - cada "
+                             "link precisa da sua propria placa"
+                             % (repetidas[0], " e ".join(usadas[repetidas[0]])))
+
+        for nome, (lid, iface, alvo) in mudancas.items():
+            db.set_link(lid, iface=iface, target=alvo)
+            for p in self.app["probes"]:
+                if p.name_link == nome:
+                    p.trocar_iface(iface, alvo)
+        log.warning("interfaces atualizadas pela interface web: %s",
+                    ", ".join("%s=%s" % (n, v[1]) for n, v in mudancas.items()))
+        fora = [i for _, i, _ in mudancas.values() if i not in disponiveis]
+        self._json({
+            "ok": True,
+            "aviso": ("a interface %s nao existe no sistema agora - o link fica sem "
+                      "medicao ate ela aparecer" % fora[0]) if fora else None,
+            "links": db.list_links(apenas_ativos=False),
+        })
 
     # -- relatorio PDF ----------------------------------------------------
     def api_report(self):
@@ -359,8 +469,9 @@ class Handler(BaseHTTPRequestHandler):
         elif period not in report.PERIODOS:
             return self._err(400, "period invalido")
         link = (q.get("link") or "").upper() or None
-        if link and link not in report.LINK_ID:
-            return self._err(400, "link deve ser GIGA ou IMPACTO")
+        internet = report.links_do_relatorio()
+        if link and link not in internet:
+            return self._err(400, "link deve ser um de: %s" % ", ".join(sorted(internet)))
         try:
             blob = report.gerar(period, frm, to, link)
         except Exception:
@@ -390,9 +501,32 @@ class Handler(BaseHTTPRequestHandler):
             for p in self.app["probes"]:
                 s = p.snapshot()
                 partes.append(
-                    "  %-8s %-8s iface=%s ip=%s gw=%s rtt=%s perda=%s%% gw_ok=%s"
-                    % (s["name"], s["state"], s["iface"], s["ip"], s["gateway"],
-                       s.get("rtt_avg"), s.get("loss"), s.get("gw_ok")))
+                    "  %-9s %-8s %-8s iface=%s ip=%s gw=%s rtt=%s perda=%s%% gw_ok=%s"
+                    % (s["name"], s["kind"], s["state"], s["iface"], s["ip"],
+                       s["gateway"], s.get("rtt_avg"), s.get("loss"), s.get("gw_ok")))
+                if s["kind"] == "internet":
+                    partes.append("             IP externo: %s (visto em %s)"
+                                  % (s.get("ip_externo") or "-",
+                                     _al.fmt_iso(s["ip_externo_ts"])
+                                     if s.get("ip_externo_ts") else "-"))
+                elif s.get("target"):
+                    partes.append("             alvo na LAN: %s" % s["target"])
+            partes.append("")
+            partes.append("--- PLACAS DE REDE ---")
+            for i in listar_ifaces():
+                partes.append("  %-18s ip=%-15s gw=%-15s link=%s cabo=%s %s"
+                              % (i["iface"], i["ip"] or "-", i["gateway"] or "-",
+                                 "sim" if i["up"] else "nao",
+                                 {True: "sim", False: "nao"}.get(i["cabo"], "?"),
+                                 "(USB)" if i["usb"] else ""))
+            partes.append("")
+            partes.append("--- ULTIMOS TESTES DE VELOCIDADE ---")
+            for t in db.list_speedtests(None, 20):
+                partes.append("  %s %-9s down=%s up=%s ping=%s via=%s %s"
+                              % (_al.fmt_iso(t["ts"]), t["link"],
+                                 t["down_mbps"], t["up_mbps"], t["ping_ms"],
+                                 t["servidor"] or "-",
+                                 ("ERRO: " + t["erro"]) if t["erro"] else ""))
             partes.append("")
             partes.append("--- CONFIGURACAO ---")
             for k, v in sorted(db.get_config().items()):
@@ -501,18 +635,70 @@ class Handler(BaseHTTPRequestHandler):
 
 
 # ---------------------------------------------------------------------------
+# Interfaces de rede
+# ---------------------------------------------------------------------------
+RE_IFACE = re.compile(r"^[A-Za-z0-9_.:-]{1,32}$")
+RE_IPV4 = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+
+# Nao sao placas de rede de verdade e so poluiriam a lista de escolha.
+IGNORAR = ("lo", "nordlynx", "docker", "br-", "veth", "tun", "tap", "wg")
+
+
+def listar_ifaces():
+    """Placas de rede do sistema, com IP e gateway, para o seletor da pagina."""
+    import probe as probe_mod
+    try:
+        nomes = sorted(os.listdir("/sys/class/net"))
+    except OSError:
+        return []
+    out = []
+    for nome in nomes:
+        if nome.startswith(IGNORAR):
+            continue
+        ip, gw, up = probe_mod.iface_info(nome)
+        mac = velocidade = None
+        for arquivo, destino in (("address", "mac"), ("speed", "vel")):
+            try:
+                with open("/sys/class/net/%s/%s" % (nome, arquivo)) as fh:
+                    valor = fh.read().strip()
+                if destino == "mac":
+                    mac = valor
+                elif valor and valor != "-1":
+                    velocidade = int(valor)
+            except (OSError, ValueError):
+                pass
+        try:
+            with open("/sys/class/net/%s/carrier" % nome) as fh:
+                cabo = fh.read().strip() == "1"
+        except OSError:
+            cabo = None
+        out.append({"iface": nome, "ip": ip, "gateway": gw, "up": up,
+                    "mac": mac, "mbps": velocidade, "cabo": cabo,
+                    "usb": "usb" in os.path.realpath("/sys/class/net/" + nome)})
+    return out
+
+
+def _num(v):
+    """Numero em formato brasileiro para o CSV (virgula decimal)."""
+    if v is None:
+        return ""
+    return ("%.2f" % v).replace(".", ",")
+
+
+# ---------------------------------------------------------------------------
 # Consultas auxiliares
 # ---------------------------------------------------------------------------
 def _downtime(conn, link_id, frm, to, tipo="QUEDA"):
     """Soma da interseccao dos eventos com a janela; retorna (total, n, maior).
 
-    Quedas causadas pelo proprio teste de velocidade ficam de fora: o link caiu
-    porque nos enchemos ele, e contar isso como indisponibilidade seria mentira.
+    Duas causas ficam de fora, porque em nenhuma delas a operadora tem culpa: a
+    queda provocada pelo proprio teste de velocidade (fomos nos que enchemos o
+    link) e o buraco de segundos ao trocar a placa de rede do link.
     """
     rows = conn.execute(
         "SELECT started_at, COALESCE(ended_at, ?) fim FROM events "
         "WHERE link_id=? AND type=? AND started_at<=? AND COALESCE(ended_at, ?)>=? "
-        "AND COALESCE(cause,'') <> 'teste_velocidade'",
+        "AND COALESCE(cause,'') NOT IN ('teste_velocidade','troca_placa')",
         (int(time.time()), link_id, tipo, to, int(time.time()), frm)).fetchall()
     total = 0
     maior = 0

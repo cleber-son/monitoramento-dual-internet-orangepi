@@ -2,7 +2,26 @@
    justamente quando a internet cair. */
 'use strict';
 
-const CORES = { GIGA: '#3987e5', IMPACTO: '#d95926' };
+const CORES = { GIGA: '#3987e5', IMPACTO: '#d95926', ROTEADOR: '#8a6fe0' };
+/* Um link novo (outra operadora, outra placa) não pode sair sem cor: a paleta
+   entra pela ordem em que o back-end devolve os links. */
+const PALETA = ['#3987e5', '#d95926', '#8a6fe0', '#2fa37a', '#c9a227'];
+const corLink = (nome) =>
+  CORES[nome] || PALETA[Math.max(0, nomesLinks().indexOf(nome)) % PALETA.length];
+
+/* O painel não sabe quantos links existem: quem manda é o /api/status. Enquanto
+   a primeira resposta não chega, os dois links de internet servem de palpite. */
+function nomesLinks() {
+  return estado.links.length ? estado.links.map((l) => l.name) : ['GIGA', 'IMPACTO'];
+}
+function linksPorTipo(kind) {
+  return estado.links.filter((l) => l.kind === kind).map((l) => l.name);
+}
+function linksDeInternet() {
+  const n = linksPorTipo('internet');
+  return n.length ? n : ['GIGA', 'IMPACTO'];
+}
+const ehLan = (nome) => estado.links.some((l) => l.name === nome && l.kind === 'lan');
 const STATUS = { good: '#0ca30c', warning: '#fab219', critical: '#d03b3b', sem: '#3a3a38' };
 const ROTULO_ESTADO = { UP: 'NO AR', DEGRADED: 'DEGRADADO', DOWN: 'FORA DO AR', NO_LINK: 'SEM LINK' };
 const CAUSA = {
@@ -10,6 +29,7 @@ const CAUSA = {
   roteador_local: 'roteador local não responde',
   cabo: 'sem link físico — verifique o cabo',
   teste_velocidade: 'link saturado pelo teste de velocidade (não conta contra a operadora)',
+  troca_placa: 'placa de rede do link trocada nas configurações (não conta contra a operadora)',
 };
 
 const estado = {
@@ -27,7 +47,9 @@ const estado = {
   ultimoDesenho: 0,
   // limiares vindos de /api/config: as cores das estatísticas seguem eles
   limiares: { lat: 80, loss: 20, jit: 60 },
-  vel: { ultimos: {}, historico: {}, rodando: null },
+  vel: { ultimos: {}, historico: {}, rodando: null, log: [] },
+  ifaces: [],
+  cfgLinks: [],
   timers: {},
 };
 
@@ -99,11 +121,13 @@ function renderCards(links) {
     let card = existentes.get(l.name);
     if (!card) {
       card = document.createElement('article');
-      card.className = 'card';
       card.dataset.link = l.name;
       box.appendChild(card);
     }
-    card.style.setProperty('--cor-link', CORES[l.name] || 'var(--muted)');
+    // o link de LAN ocupa a linha inteira, embaixo dos links de internet: ele é
+    // apoio de diagnóstico, não um terceiro provedor concorrendo por atenção
+    card.className = 'card' + (l.kind === 'lan' ? ' card-lan' : '');
+    card.style.setProperty('--cor-link', corLink(l.name));
     const st = l.state || 'NO_LINK';
     const rtt = l.rtt_avg !== null && l.rtt_avg !== undefined ? l.rtt_avg : l.rtt_ewma;
     const up = l.uptime || {};
@@ -114,7 +138,8 @@ function renderCards(links) {
     card.innerHTML = `
       <div class="card-topo">
         <span class="bolinha b-${st}"></span>
-        <span class="card-nome" style="color:${CORES[l.name] || '#fff'}">${l.name}</span>
+        <span class="card-nome" style="color:${corLink(l.name)}">${l.name}</span>
+        ${l.kind === 'lan' ? '<span class="tag tag-lan" title="rede local: mede a latência até o seu roteador, não a internet">LAN</span>' : ''}
         <span class="card-estado e-${st}">${ROTULO_ESTADO[st] || st}</span>
       </div>
       <div class="card-metricas">
@@ -126,10 +151,12 @@ function renderCards(links) {
       <svg class="card-spark" data-spark="${l.name}"></svg>
       <div class="card-rodape">
         <span>${rotDesde} <b>${desde}</b></span>
-        <span>gateway <b>${l.gateway || '—'}</b></span>
-        <span>IP <b>${l.ip || '—'}</b></span>
-        <span>iface <b>${l.iface || '—'}</b></span>
-        <span>gw <b>${l.gw_ok ? 'ok' : 'sem resposta'}</b></span>
+        <span>${l.kind === 'lan' ? 'alvo' : 'gateway'} <b>${(l.kind === 'lan' ? l.target : l.gateway) || '—'}</b></span>
+        <span>IP local <b>${l.ip || '—'}</b></span>
+        ${l.kind === 'lan' ? ''
+          : `<span class="ip-externo" title="${l.ip_externo_ts ? 'visto em ' + fmtDataHora(l.ip_externo_ts) : 'ainda não consultado'}">IP externo <b>${l.ip_externo || '—'}</b></span>`}
+        <span>placa <b>${l.iface || '—'}</b></span>
+        ${l.kind === 'lan' ? '' : `<span>gw <b>${l.gw_ok ? 'ok' : 'sem resposta'}</b></span>`}
         ${l.dns_ms > 0 ? `<span>DNS <b>${nf(l.dns_ms, 1)} ms</b></span>` : ''}
         <span>uptime 7d <b>${up.d7 == null ? '—' : nf(up.d7, 2) + '%'}</b></span>
         <span>uptime 30d <b>${up.d30 == null ? '—' : nf(up.d30, 2) + '%'}</b></span>
@@ -157,7 +184,7 @@ function desenharSpark(nome, pontos) {
     d += (aberto ? 'L' : 'M') + X(p[0]).toFixed(1) + ' ' + Y(p[1]).toFixed(1) + ' ';
     aberto = true;
   });
-  svg.appendChild(svgEl('path', { d, fill: 'none', stroke: CORES[nome], 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', opacity: .9 }));
+  svg.appendChild(svgEl('path', { d, fill: 'none', stroke: corLink(nome), 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', opacity: .9 }));
 }
 
 /* ------------------------------------------------------------ eixos */
@@ -269,7 +296,7 @@ function desenharLatencia(series, eventos, t0, t1) {
   // séries: banda min–max + linha da média
   for (const nome in series) {
     const pts = series[nome];
-    const cor = CORES[nome];
+    const cor = corLink(nome);
     let banda = '', volta = [], aberto = false;
     pts.forEach((p) => {
       const [ts, avg, mn, mx] = p;
@@ -317,15 +344,16 @@ function desenharPerda(series, t0, t1) {
 
   const nomes = Object.keys(series);
   const total = Math.max(1, Math.max(...nomes.map((n) => series[n].length)));
-  const lg = Math.max(1.2, (iw / total) * 0.42);
+  // as barras dos links dividem a fatia do instante, com 1px de folga entre elas
+  const lg = Math.max(1.2, ((iw / total) * 0.86) / nomes.length);
+  const grupo = nomes.length * (lg + 1);
   nomes.forEach((nome, idx) => {
-    const cor = CORES[nome];
+    const cor = corLink(nome);
     series[nome].forEach((p) => {
       const perda = p[4];
       if (!perda) return;
       const alt = Math.max(1.5, (perda / 100) * ih);
-      // 2px de folga entre as barras dos dois links (regra do spacer)
-      const x = X(p[0]) + (idx === 0 ? -lg - 1 : 1);
+      const x = X(p[0]) - grupo / 2 + idx * (lg + 1);
       svg.appendChild(svgEl('rect', { x, y: M.t + ih - alt, width: lg, height: alt, fill: cor, rx: Math.min(2, lg / 2), opacity: .92 }));
     });
   });
@@ -366,7 +394,7 @@ function ligarCrosshair(svg, tt, wrap, series, X, M, ih, t0, t1, unidade, campo)
       if (!melhor || dist > (t1 - t0) / 40) continue;
       melhorX = melhorX === null ? X(melhor[0]) : melhorX;
       const v = melhor[campo];
-      linhas.push(`<div class="tt-linha"><i style="background:${CORES[nome]}"></i>${nome}: <strong>${v === null || v === undefined ? 'sem resposta' : nf(v, 1) + ' ' + unidade}</strong></div>`);
+      linhas.push(`<div class="tt-linha"><i style="background:${corLink(nome)}"></i>${nome}: <strong>${v === null || v === undefined ? 'sem resposta' : nf(v, 1) + ' ' + unidade}</strong></div>`);
       if (campo === 1 && melhor[4] > 0) linhas[linhas.length - 1] = linhas[linhas.length - 1].replace('</div>', ` <span style="color:#ff9b9b">perda ${nf(melhor[4], 0)}%</span></div>`);
     }
     if (!linhas.length) return esconder();
@@ -404,7 +432,7 @@ function desenharTimeline(series, eventos, t0, t1) {
   const N = Math.max(8, Math.min(teto, Math.round((t1 - t0) / INTERVALO_AMOSTRA)));
   const passo = (t1 - t0) / N;
 
-  ['GIGA', 'IMPACTO'].forEach((nome) => {
+  nomesLinks().forEach((nome) => {
     const pts = series[nome] || [];
     const cobertos = new Set();
     pts.forEach((p) => cobertos.add(Math.floor((p[0] - t0) / passo)));
@@ -412,7 +440,7 @@ function desenharTimeline(series, eventos, t0, t1) {
     const linha = document.createElement('div');
     linha.className = 'tl-linha';
     const evs = eventos.filter((e) => e.link === nome);
-    let html = `<div class="tl-rot"><span style="color:${CORES[nome]}">${nome}</span><span class="muted">${rotuloTempo(t0, t1 - t0)} → agora</span></div><div class="tl-barras">`;
+    let html = `<div class="tl-rot"><span style="color:${corLink(nome)}">${nome}</span><span class="muted">${rotuloTempo(t0, t1 - t0)} → agora</span></div><div class="tl-barras">`;
     for (let i = 0; i < N; i++) {
       const a = t0 + i * passo, b = a + passo;
       const queda = evs.some((e) => e.type === 'QUEDA' && e.started_at < b && (e.ended_at || t1) > a);
@@ -426,6 +454,19 @@ function desenharTimeline(series, eventos, t0, t1) {
     linha.innerHTML = html + '</div>';
     box.appendChild(linha);
   });
+}
+
+/* A legenda acompanha os links que existem de fato — inclusive o de LAN, que
+   entra identificado para ninguém confundir 0,5 ms de roteador com internet. */
+function montarLegenda() {
+  const box = $('legenda');
+  if (!box) return;
+  const itens = nomesLinks().map((n) =>
+    `<span class="leg"><i class="sw" style="background:${corLink(n)}"></i>${n}${
+      ehLan(n) ? ' <small class="muted">(rede local)</small>' : ''}</span>`);
+  itens.push('<span class="leg"><i class="sw sw-queda"></i>faixa de queda</span>');
+  itens.push(`<span class="leg"><i class="sw" style="background:${STATUS.sem}"></i>sem monitoramento</span>`);
+  box.innerHTML = itens.join('');
 }
 
 /* ------------------------------------------------------------ dados */
@@ -443,20 +484,20 @@ function redesenhar() {
   desenharLatencia(g.series, g.eventos, g.t0, g.t1);
   desenharPerda(g.series, g.t0, g.t1);
   desenharTimeline(g.series, g.eventos, g.t0, g.t1);
-  desenharSpark('GIGA', (g.series.GIGA || []).slice(-180));
-  desenharSpark('IMPACTO', (g.series.IMPACTO || []).slice(-180));
+  nomesLinks().forEach((n) => desenharSpark(n, (g.series[n] || []).slice(-180)));
 }
 
 async function carregarGraficos() {
   const t1 = Math.floor(Date.now() / 1000);
   const t0 = t1 - estado.span;
+  const nomes = nomesLinks();
   try {
-    const [g, i, ev] = await Promise.all([
-      pegar(`/api/samples?link=GIGA&from=${t0}&to=${t1}`),
-      pegar(`/api/samples?link=IMPACTO&from=${t0}&to=${t1}`),
-      pegar(`/api/events?from=${t0 - 86400}&limit=500`),
-    ]);
-    const series = { GIGA: g.points, IMPACTO: i.points };
+    const respostas = await Promise.all(
+      nomes.map((n) => pegar(`/api/samples?link=${encodeURIComponent(n)}&from=${t0}&to=${t1}`))
+        .concat([pegar(`/api/events?from=${t0 - 86400}&limit=500`)]));
+    const ev = respostas.pop();
+    const series = {};
+    nomes.forEach((n, i) => { series[n] = respostas[i].points; });
     estado.serieAtual = series;
     estado.ultimoGrafico = { series, eventos: ev.events, t0, t1 };
     redesenhar();
@@ -523,7 +564,10 @@ const GRUPOS = [
   },
 ];
 
-function celulaResumo(def, nome, valor, vals) {
+/* `vals` são todos os links (escala das barras); `valsComp` são só os links
+   comparáveis entre si. O selo "melhor" nunca vai para o link de LAN: 0,5 ms
+   até o roteador venceria a GIGA em toda linha da tabela e não diria nada. */
+function celulaResumo(def, nome, valor, vals, valsComp) {
   if (valor === null || valor === undefined) {
     return `<td class="cel"><span class="cel-vazio">—</span></td>`;
   }
@@ -532,12 +576,13 @@ function celulaResumo(def, nome, valor, vals) {
   const teto = Math.max(...validos.map(Math.abs), 0);
   const largura = def.barra && teto > 0 ? Math.round((Math.abs(valor) / teto) * 100) : 0;
   let melhor = false;
-  if (def.melhor && validos.length === 2 && validos[0] !== validos[1]) {
-    const alvo = def.melhor === 'maior' ? Math.max(...validos) : Math.min(...validos);
+  const comp = (valsComp || []).filter((v) => v !== null && v !== undefined);
+  if (def.melhor && comp.length >= 2 && new Set(comp).size > 1) {
+    const alvo = def.melhor === 'maior' ? Math.max(...comp) : Math.min(...comp);
     melhor = valor === alvo;
   }
   return `<td class="cel${melhor ? ' cel-melhor' : ''}">
-      ${largura ? `<span class="cel-barra" style="width:${largura}%;background:${CORES[nome]}"></span>` : ''}
+      ${largura ? `<span class="cel-barra" style="width:${largura}%;background:${corLink(nome)}"></span>` : ''}
       <span class="cel-conteudo">
         <span class="chip q-${qual}" title="${qual}">${FAIXAS[qual]}</span>
         <span class="valor${def.forte ? ' destaque' : ''}">${def.fmt(valor)}</span>
@@ -547,21 +592,29 @@ function celulaResumo(def, nome, valor, vals) {
 
 async function carregarResumo() {
   const t1 = Math.floor(Date.now() / 1000), t0 = t1 - estado.span;
+  const nomes = nomesLinks();
+  const internet = linksDeInternet();
   try {
     const r = await pegar(`/api/summary?period=custom&from=${t0}&to=${t1}`);
+    $('resumo-cab').innerHTML = '<th scope="col">Métrica</th>' + nomes.map((n) =>
+      `<th scope="col" style="color:${corLink(n)}">${n}${
+        ehLan(n) ? '<small class="muted"> (LAN)</small>' : ''}</th>`).join('');
     const tb = $('tab-resumo').querySelector('tbody');
     limpar(tb);
     GRUPOS.forEach((g) => {
       const cab = document.createElement('tr');
       cab.className = 'linha-grupo';
-      cab.innerHTML = `<th colspan="3" scope="colgroup"><span class="g-icone">${g.icone}</span>${g.titulo}</th>`;
+      cab.innerHTML = `<th colspan="${nomes.length + 1}" scope="colgroup"><span class="g-icone">${g.icone}</span>${g.titulo}</th>`;
       tb.appendChild(cab);
 
       g.linhas.forEach((def) => {
-        const vals = ['GIGA', 'IMPACTO'].map((n) => (r.links[n] ? r.links[n][def.k] : null));
+        const val = (n) => (r.links[n] ? r.links[n][def.k] : null);
+        const vals = nomes.map(val);
+        const valsComp = internet.map(val);
         const tr = document.createElement('tr');
         tr.innerHTML = `<td class="metrica">${def.rot}</td>` +
-          ['GIGA', 'IMPACTO'].map((n, i) => celulaResumo(def, n, vals[i], vals)).join('');
+          nomes.map((n, i) => celulaResumo(def, n, vals[i], vals,
+                                           internet.includes(n) ? valsComp : null)).join('');
         tb.appendChild(tr);
       });
     });
@@ -601,7 +654,7 @@ function velHistorico(nome) {
   const teto = Math.max(...lista.map((t) => t.down_mbps || 0)) || 1;
   const barras = lista.map((t) => {
     const h = Math.max(8, Math.round(((t.down_mbps || 0) / teto) * 100));
-    return `<i style="height:${h}%;background:${CORES[nome]}" title="${fmtDataHora(t.ts)} — ${nf(t.down_mbps, 1)} Mbps ↓ / ${nf(t.up_mbps, 1)} Mbps ↑"></i>`;
+    return `<i style="height:${h}%;background:${corLink(nome)}" title="${fmtDataHora(t.ts)} — ${nf(t.down_mbps, 1)} Mbps ↓ / ${nf(t.up_mbps, 1)} Mbps ↑"></i>`;
   }).join('');
   return `<div class="vel-hist" aria-label="testes anteriores"><span class="met-rot">testes anteriores ↓</span><div class="vel-hist-barras">${barras}</div></div>`;
 }
@@ -609,8 +662,8 @@ function velHistorico(nome) {
 function renderVelocidade() {
   const box = $('vel-grid');
   limpar(box);
-  ['GIGA', 'IMPACTO'].forEach((nome) => {
-    const cor = CORES[nome];
+  linksDeInternet().forEach((nome) => {
+    const cor = corLink(nome);
     const rod = estado.vel.rodando && estado.vel.rodando.link === nome ? estado.vel.rodando : null;
     const ok = estado.vel.ultimos[nome] || null;
     const ultimo = (estado.vel.historico[nome] || [])[0] || null;
@@ -654,19 +707,58 @@ function renderVelocidade() {
 }
 
 function agruparVel(lista) {
-  const out = { GIGA: [], IMPACTO: [] };
-  lista.forEach((t) => { if (out[t.link]) out[t.link].push(t); });
+  const out = {};
+  linksDeInternet().forEach((n) => { out[n] = []; });
+  lista.forEach((t) => { (out[t.link] = out[t.link] || []).push(t); });
   return out;
 }
 
 async function carregarVelocidade() {
   try {
-    const r = await pegar('/api/speedtest?limit=40');
+    const filtro = $('f-vel-link') ? $('f-vel-link').value : '';
+    const r = await pegar('/api/speedtest?limit=200'
+      + (filtro ? '&link=' + encodeURIComponent(filtro) : ''));
     estado.vel.rodando = r.rodando;
     estado.vel.ultimos = r.ultimos || {};
-    estado.vel.historico = agruparVel(r.historico || []);
+    estado.vel.log = r.historico || [];
+    // os cards mostram sempre os dois links; o filtro é só do log de baixo
+    if (!filtro) estado.vel.historico = agruparVel(estado.vel.log);
     renderVelocidade();
+    renderLogVelocidade();
   } catch (e) { console.error(e); }
+}
+
+/* Log dos testes: a mesma tabela que vira CSV. Um teste com erro continua na
+   lista — saber que a medição falhou às 3h da manhã também é informação. */
+function renderLogVelocidade() {
+  const tb = $('tab-vel') && $('tab-vel').querySelector('tbody');
+  if (!tb) return;
+  const lista = estado.vel.log || [];
+  limpar(tb);
+  if (!lista.length) {
+    tb.innerHTML = '<tr><td colspan="8" class="muted vazio">Nenhum teste de velocidade registrado ainda.</td></tr>';
+    $('vel-log-info').textContent = '—';
+    return;
+  }
+  lista.forEach((t) => {
+    const falhou = t.down_mbps === null || t.down_mbps === undefined;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td data-rot="Quando">${fmtDataHora(t.ts)}</td>
+      <td data-rot="Link"><span class="ponto-link" style="background:${corLink(t.link)}"></span>${t.link}</td>
+      <td data-rot="Download" class="${falhou ? '' : 'destaque'}">${falhou ? '—' : nf(t.down_mbps, 1) + ' Mbps'}</td>
+      <td data-rot="Upload">${t.up_mbps == null ? '—' : nf(t.up_mbps, 1) + ' Mbps'}</td>
+      <td data-rot="Ping">${t.ping_ms == null ? '—' : nf(t.ping_ms, 1) + ' ms'}</td>
+      <td data-rot="Jitter">${t.jitter_ms == null ? '—' : nf(t.jitter_ms, 1) + ' ms'}</td>
+      <td data-rot="Servidor" class="muted">${t.servidor || '—'}</td>
+      <td data-rot="Observação">${t.erro ? `<span class="vel-erro">${falhou ? '❌' : '⚠️'} ${t.erro}</span>` : '<span class="muted">ok</span>'}</td>`;
+    tb.appendChild(tr);
+  });
+  const ok = lista.filter((t) => t.down_mbps != null);
+  const media = ok.length ? ok.reduce((a, t) => a + t.down_mbps, 0) / ok.length : null;
+  $('vel-log-info').textContent =
+    `${lista.length} teste(s) listados · ${ok.length} com medição válida`
+    + (media ? ` · média de download ${nf(media, 1)} Mbps` : '');
 }
 
 async function testarVelocidade(nome) {
@@ -706,7 +798,7 @@ async function carregarEventos() {
       const tr = document.createElement('tr');
       const aberto = !e.ended_at;
       tr.innerHTML = `
-        <td data-rot="Link"><span class="ponto-link" style="background:${CORES[e.link] || '#888'}"></span>${e.link}</td>
+        <td data-rot="Link"><span class="ponto-link" style="background:${corLink(e.link)}"></span>${e.link}</td>
         <td data-rot="Tipo"><span class="tag tag-${e.type}">${e.type === 'QUEDA' ? 'Queda' : 'Latência alta'}</span>${e.flapping ? ' <span class="tag tag-aberto">instável</span>' : ''}</td>
         <td data-rot="Início">${fmtDataHora(e.started_at)}</td>
         <td data-rot="Fim">${aberto ? '<span class="tag tag-aberto">em andamento</span>' : fmtDataHora(e.ended_at)}</td>
@@ -828,13 +920,15 @@ function conectar() {
         if (!novo.ultima_queda) novo.ultima_queda = antigo.ultima_queda;
       }
     });
+    const mudou = d.links.map((l) => l.name).join('|') !== nomesLinks().join('|');
     estado.links = d.links;
     estado.porta = d.porta;
+    if (mudou) { preencherFiltrosDeLink(); montarLegenda(); }
     renderCards(d.links);
     atualizarBanner(d.links);
     if (estado.serieAtual) {
-      desenharSpark('GIGA', (estado.serieAtual.GIGA || []).slice(-180));
-      desenharSpark('IMPACTO', (estado.serieAtual.IMPACTO || []).slice(-180));
+      nomesLinks().forEach((n) =>
+        desenharSpark(n, (estado.serieAtual[n] || []).slice(-180)));
     }
   });
 
@@ -872,6 +966,96 @@ function conectar() {
     carregarResumo();
     setTimeout(carregarGraficos, 1500);
   });
+}
+
+/* ------------------------------------------------ placas de rede (config)
+   Cada link é uma placa, e a placa pode ser trocada: quando o adaptador USB for
+   substituído, o nome da interface muda e é aqui que o link volta a apontar
+   para o lugar certo — sem perder o histórico, que é do link e não da placa. */
+function descreverIface(i) {
+  const partes = [];
+  if (i.ip) partes.push(i.ip);
+  if (i.gateway) partes.push('gw ' + i.gateway);
+  if (i.usb) partes.push('USB');
+  if (i.mbps) partes.push(i.mbps + ' Mbps');
+  partes.push(i.cabo === false ? 'sem cabo' : i.up ? 'ativa' : 'inativa');
+  return partes.join(' · ');
+}
+
+function renderIfaces() {
+  const box = $('ifaces-grid');
+  if (!box) return;
+  limpar(box);
+  const lista = estado.ifaces;
+  estado.cfgLinks.forEach((l) => {
+    // a placa gravada pode não existir agora (adaptador fora do ar); ela entra
+    // na lista assim mesmo, senão salvar a tela apagaria a escolha do usuário
+    const conhecidas = lista.map((i) => i.iface);
+    const opcoes = conhecidas.concat(
+      conhecidas.includes(l.iface) ? [] : [l.iface]).map((nome) => {
+      const i = lista.find((x) => x.iface === nome);
+      const rot = i ? `${nome} — ${descreverIface(i)}` : `${nome} — ausente no sistema`;
+      return `<option value="${nome}"${nome === l.iface ? ' selected' : ''}>${rot}</option>`;
+    }).join('');
+
+    const bloco = document.createElement('div');
+    bloco.className = 'iface-item';
+    bloco.style.setProperty('--cor-link', corLink(l.name));
+    bloco.innerHTML = `
+      <div class="iface-topo">
+        <span class="ponto-link" style="background:${corLink(l.name)}"></span>
+        <b style="color:${corLink(l.name)}">${l.name}</b>
+        <span class="muted">${l.kind === 'lan' ? 'rede local' : 'internet'}</span>
+      </div>
+      <label class="campo campo-largo"><span>Placa de rede</span>
+        <select data-link="${l.name}" class="sel-iface">${opcoes}</select>
+      </label>
+      ${l.kind === 'lan' ? `<label class="campo"><span>Endereço monitorado (seu roteador)</span>
+        <input type="text" class="inp-alvo" data-link="${l.name}" value="${l.target || ''}"
+               placeholder="192.168.200.254" inputmode="decimal" autocomplete="off"></label>` : ''}`;
+    box.appendChild(bloco);
+  });
+}
+
+async function carregarIfaces() {
+  try {
+    const r = await pegar('/api/links');
+    estado.cfgLinks = r.links || [];
+    estado.ifaces = r.ifaces || [];
+    renderIfaces();
+  } catch (e) { console.error(e); }
+}
+
+async function salvarIfaces() {
+  const msg = $('c-if-msg');
+  const corpo = { links: {} };
+  document.querySelectorAll('.sel-iface').forEach((sel) => {
+    corpo.links[sel.dataset.link] = { iface: sel.value };
+  });
+  document.querySelectorAll('.inp-alvo').forEach((inp) => {
+    const alvo = corpo.links[inp.dataset.link];
+    if (alvo) alvo.target = inp.value.trim();
+  });
+  msg.textContent = 'salvando…';
+  msg.style.color = '';
+  try {
+    const r = await fetch('/api/links', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(corpo),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.erro || 'erro');
+    estado.cfgLinks = j.links || estado.cfgLinks;
+    if (j.aviso) { msg.textContent = '⚠️ ' + j.aviso; msg.style.color = '#f5c451'; }
+    else { msg.textContent = '✅ salvo — a medição já está usando a placa nova'; msg.style.color = '#7ee07e'; }
+    await carregarIfaces();
+    // o histórico anterior continua no gráfico; o que muda é de onde vêm as
+    // amostras daqui para a frente
+    setTimeout(() => { carregarGraficos(); carregarResumo(); }, 2500);
+  } catch (e) {
+    msg.textContent = '❌ ' + e.message;
+    msg.style.color = '#ff9b9b';
+  }
 }
 
 /* ------------------------------------------------------------ config */
@@ -950,6 +1134,9 @@ function msgManut(txt, cor) {
   const m = $('m-msg');
   m.textContent = txt;
   m.style.color = cor || '';
+  const v = $('vel-log-info');
+  // o botão do CSV vive no painel de velocidade, longe do #m-msg lá embaixo
+  if (v && txt && estado.msgNoLog) { v.textContent = txt; v.style.color = cor || ''; }
 }
 
 function nomeDoCabecalho(resp, padrao) {
@@ -1017,6 +1204,15 @@ async function resetar() {
   }
 }
 
+/* Os <select> de link são preenchidos a partir dos links que existem. */
+function preencherFiltrosDeLink() {
+  const nomes = nomesLinks();
+  const op = (n) => `<option value="${n}">${n}</option>`;
+  $('f-link').innerHTML = '<option value="">Todos</option>' + nomes.map(op).join('');
+  const fv = $('f-vel-link');
+  if (fv) fv.innerHTML = '<option value="">Todos</option>' + linksDeInternet().map(op).join('');
+}
+
 /* ------------------------------------------------------------ init */
 function ligarEventos() {
   document.querySelectorAll('.btn-per').forEach((b) => {
@@ -1060,6 +1256,25 @@ function ligarEventos() {
 
   $('c-salvar').addEventListener('click', salvarConfig);
   $('c-testar').addEventListener('click', testarWebhook);
+  $('c-salvar-ifaces').addEventListener('click', salvarIfaces);
+  $('c-recarregar-ifaces').addEventListener('click', async () => {
+    $('c-if-msg').textContent = 'relendo…';
+    await carregarIfaces();
+    $('c-if-msg').textContent = `${estado.ifaces.length} placa(s) encontradas`;
+  });
+  // a lista de placas só é relida quando o painel abre: são vários `ip` por vez
+  $('config').addEventListener('toggle', () => {
+    if ($('config').open) carregarIfaces();
+  });
+
+  $('f-vel-link').addEventListener('change', carregarVelocidade);
+  $('btn-vel-csv').addEventListener('click', (ev) => {
+    const f = $('f-vel-link').value;
+    estado.msgNoLog = true;
+    baixar('/api/speedtest.csv' + (f ? '?link=' + encodeURIComponent(f) : ''),
+           'testes-velocidade.csv', 'Log dos testes', ev.currentTarget)
+      .finally(() => { estado.msgNoLog = false; });
+  });
 
   $('btn-pdf').addEventListener('click', (ev) =>
     baixar('/api/report.pdf?period=' + $('r-periodo').value,
@@ -1134,6 +1349,9 @@ async function iniciar() {
     const s = await pegar('/api/status');
     estado.links = s.links;
     estado.porta = s.porta;
+    // tudo que depende de QUAIS links existem vem depois desta resposta
+    preencherFiltrosDeLink();
+    montarLegenda();
     renderCards(s.links);
     atualizarBanner(s.links);
     $('rodape-info').textContent =
@@ -1143,6 +1361,7 @@ async function iniciar() {
   await Promise.all([carregarGraficos(), carregarResumo(), carregarEventos(),
                      carregarVelocidade()]);
   conectar();
+  if ($('config').open) carregarIfaces();
   setInterval(relogio, 1000);
   setInterval(carregarEventos, 60000);
   agendarAtualizacoes();

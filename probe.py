@@ -13,6 +13,7 @@ import logging
 import random
 import re
 import socket
+import ssl
 import struct
 import subprocess
 import threading
@@ -33,6 +34,7 @@ DEG_LAT_CYCLES = 5         # ~10s de latencia alta
 DEG_PICO_CYCLES = 2        # latencia acima de 3x o limiar: alerta quase imediato
 DEG_PICO_FATOR = 3.0
 DEG_CLEAR_CYCLES = 10      # ~20s para sair de degradado (histerese)
+TROCA_CARENCIA = 60        # s de carencia depois de trocar a placa de rede
 EWMA_ALPHA = 0.4           # reage rapido, ja que o ciclo agora e curto
 
 # Alvos escolhidos de proposito fora de 1.1.1.1/8.8.8.8: existem rotas estaticas
@@ -43,6 +45,14 @@ DNS_NAME = "www.google.com"
 TCP_TARGET = ("9.9.9.9", 443)
 HTTP_TARGET = ("1.1.1.1", 80, "cp.cloudflare.com", "/generate_204")
 
+# IP externo: quem responde e a propria borda da Cloudflare, entao o IP que ela
+# devolve e exatamente o que o mundo ve saindo por AQUELA interface. Vai preso
+# ao device, senao todo link responderia com o IP da rota default.
+EXTIP_HOST = "1.1.1.1"
+EXTIP_SNI = "one.one.one.one"
+EXTIP_PATH = "/cdn-cgi/trace"
+RE_EXTIP = re.compile(r"^ip=([0-9a-fA-F.:]+)$", re.M)
+
 RE_LOSS = re.compile(r"([\d.]+)% packet loss")
 RE_RTT = re.compile(r"=\s*([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+)\s*ms")
 
@@ -51,6 +61,7 @@ EVERY_DNS = 15     # 30s
 EVERY_TCP = 15     # 30s
 EVERY_HTTP = 30    # 60s
 EVERY_IFACE = 30   # 60s
+EVERY_EXTIP = 150  # 5min -- IP publico muda raramente e a consulta custa um TLS
 
 
 # ---------------------------------------------------------------------------
@@ -207,16 +218,58 @@ def http_probe(iface, timeout=5.0):
         sock.close()
 
 
+def ip_externo(iface, timeout=6.0):
+    """IP publico visto pelo mundo naquela interface, ou None.
+
+    A verificacao do certificado fica desligada de proposito: conectamos por IP
+    (1.1.1.1) e nao por nome, e nao ha segredo nenhum trafegando -- a resposta e
+    publica. Ligar a verificacao so trocaria "sem IP" por "erro de certificado".
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    tls = None
+    try:
+        _bind(sock, iface)
+        sock.settimeout(timeout)
+        sock.connect((EXTIP_HOST, 443))
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        tls = ctx.wrap_socket(sock, server_hostname=EXTIP_SNI)
+        tls.sendall(("GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: netmon\r\n"
+                     "Connection: close\r\n\r\n" % (EXTIP_PATH, EXTIP_SNI)).encode())
+        buf = b""
+        while len(buf) < 8192:
+            pedaco = tls.recv(2048)
+            if not pedaco:
+                break
+            buf += pedaco
+        m = RE_EXTIP.search(buf.decode("utf-8", "replace"))
+        return m.group(1) if m else None
+    except (OSError, ssl.SSLError, ValueError) as exc:
+        log.debug("ip externo de %s falhou: %s", iface, exc)
+        return None
+    finally:
+        try:
+            (tls or sock).close()
+        except OSError:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Maquina de estados por link
 # ---------------------------------------------------------------------------
 class LinkProbe(threading.Thread):
 
-    def __init__(self, link_id, name, iface, writer, alerts, stop_event):
+    def __init__(self, link_id, name, iface, writer, alerts, stop_event,
+                 kind="internet", target=None):
         super().__init__(name="probe-%s" % name, daemon=True)
         self.link_id = link_id
         self.name_link = name
         self.iface = iface
+        # kind='lan': o alvo e um IP da rede local (o roteador de casa). Nao ha
+        # internet a medir ali, entao DNS/TCP/HTTP e IP externo ficam de fora.
+        self.kind = kind
+        self.target = target
         self.writer = writer
         self.alerts = alerts
         self.stop_event = stop_event
@@ -240,17 +293,27 @@ class LinkProbe(threading.Thread):
         self.ip = None
         self.gateway = None
         self.iface_up = False
+        self.ip_externo = None
+        self.ip_externo_ts = None
+        self.ip_externo_desde = None
+        self._extip_ocupado = False
         self.gw_hist = []          # ultimos 4 resultados de ping ao gateway
         self.last = {}
         # enquanto um teste de velocidade satura o link, nao faz sentido
         # anunciar "latencia alta": a fila e nossa
         self.mudo_degradacao_ate = 0
+        # janela logo apos trocar de placa: o buraco entre uma interface e outra
+        # e nosso, nao da operadora
+        self.troca_ate = 0
         self._lock = threading.Lock()
         self._cycle = 0
         # 3 sondas ICMP simultaneas por ciclo: alvo primario, alvo alternativo
         # e gateway
-        self.pool = ThreadPoolExecutor(max_workers=3,
+        # 3 sondas ICMP + a consulta de IP externo, que roda solta para nao
+        # segurar o ciclo por ate 6s quando o link esta ruim
+        self.pool = ThreadPoolExecutor(max_workers=4,
                                        thread_name_prefix="ping-%s" % name)
+        self._restaurar_ip_externo()
 
     # -- helpers ----------------------------------------------------------
     def _ewma(self, prev, value):
@@ -269,6 +332,75 @@ class LinkProbe(threading.Thread):
         self.mudo_degradacao_ate = time.time() + max(0, segundos)
         log.info("%s: alerta de latencia alta suspenso por %ds",
                  self.name_link, int(segundos))
+
+    def _restaurar_ip_externo(self):
+        """O ultimo IP publico conhecido fica no banco: depois de um restart o
+        card ja abre preenchido em vez de esperar 5 min pela primeira consulta."""
+        if self.kind != "internet":
+            return
+        d = db.get_meta("ip_externo:%s" % self.name_link) or {}
+        if isinstance(d, dict) and d.get("ip"):
+            self.ip_externo = d["ip"]
+            self.ip_externo_ts = d.get("ts")
+            self.ip_externo_desde = d.get("desde")
+
+    def _consultar_ip_externo(self):
+        if self._extip_ocupado:
+            return
+        self._extip_ocupado = True
+
+        def tarefa():
+            try:
+                novo = ip_externo(self.iface)
+                agora = int(time.time())
+                if not novo:
+                    return
+                if novo != self.ip_externo:
+                    if self.ip_externo:
+                        log.warning("%s: IP externo mudou de %s para %s",
+                                    self.name_link, self.ip_externo, novo)
+                    self.ip_externo_desde = agora
+                self.ip_externo = novo
+                self.ip_externo_ts = agora
+                db.set_meta("ip_externo:%s" % self.name_link,
+                            {"ip": novo, "ts": agora,
+                             "desde": self.ip_externo_desde or agora,
+                             "iface": self.iface})
+            except Exception:
+                log.exception("falha consultando o IP externo de %s", self.name_link)
+            finally:
+                self._extip_ocupado = False
+
+        try:
+            self.pool.submit(tarefa)
+        except RuntimeError:
+            self._extip_ocupado = False
+
+    def trocar_iface(self, iface, target=None):
+        """Passa a sondar por outra placa de rede, sem reiniciar o processo.
+
+        E o caminho normal quando o adaptador USB e trocado: o nome da interface
+        muda, o link continua sendo o mesmo. O estado antigo nao serve mais --
+        latencia, IP e gateway sao de outra placa -- entao zera tudo.
+        """
+        antiga = self.iface
+        self.iface = iface
+        if target is not None:
+            self.target = target or None
+        if antiga == iface:
+            return
+        log.warning("%s: interface trocada de %s para %s", self.name_link, antiga, iface)
+        # a placa nova leva alguns segundos para pegar IP e rota; a queda desses
+        # segundos e da troca e fica marcada como tal, fora do relatorio
+        self.troca_ate = time.time() + TROCA_CARENCIA
+        self.ip_externo = None
+        self.ip_externo_ts = self.ip_externo_desde = None
+        self.ewma_rtt = self.ewma_jitter = None
+        self.ewma_loss = 0.0
+        self.gw_hist = []
+        with self._lock:
+            self.last = {}
+        self._refresh_iface()
 
     def resetar(self):
         """Zera a maquina de estados apos um reset do banco.
@@ -294,8 +426,13 @@ class LinkProbe(threading.Thread):
             snap = dict(self.last)
         snap.update({
             "name": self.name_link,
+            "kind": self.kind,
+            "target": self.target,
             "iface": self.iface,
             "ip": self.ip,
+            "ip_externo": self.ip_externo,
+            "ip_externo_ts": self.ip_externo_ts,
+            "ip_externo_desde": self.ip_externo_desde,
             "gateway": self.gateway,
             "state": self.state,
             "state_since": self.state_since,
@@ -327,6 +464,10 @@ class LinkProbe(threading.Thread):
 
     def _refresh_iface(self):
         self.ip, self.gateway, self.iface_up = iface_info(self.iface)
+        # no link de LAN quem manda e o alvo escolhido pelo usuario: o roteador
+        # dele pode nao ser o gateway default daquela placa
+        if self.kind == "lan" and self.target:
+            self.gateway = self.target
 
     def _reconcile_open_events(self):
         """Depois de um restart, eventos abertos deste link voltam a ser rastreados."""
@@ -349,46 +490,63 @@ class LinkProbe(threading.Thread):
         if self._cycle == 1 or self._cycle % EVERY_IFACE == 0:
             self._refresh_iface()
 
-        # 1+2) os dois alvos de internet e o gateway vao JUNTOS, em paralelo.
-        # Em serie, um ciclo com o link caido custaria ~4,5s (tres esperas de
-        # timeout somadas) e o alerta demoraria. Em paralelo custa ~1,5s, que e
-        # o que permite confirmar uma queda em 3-4s.
-        f_a = self.pool.submit(ping, self.iface, PING_TARGETS[0])
-        f_b = self.pool.submit(ping, self.iface, PING_TARGETS[1])
-        f_gw = (self.pool.submit(ping, self.iface, self.gateway, 2, 0.25, 1)
-                if self.gateway else None)
+        if self.kind == "lan":
+            # a "internet" deste link e um IP da propria casa: um unico alvo,
+            # que ao mesmo tempo e o alvo da medicao e o gateway
+            alvo = self.target or self.gateway
+            res = ping(self.iface, alvo) if alvo else {
+                "loss": 100.0, "rtt_min": None, "rtt_avg": None, "rtt_max": None,
+                "jitter": None, "err": "no_link"}
+            alt = res
+            no_link = res["err"] == "no_link" or not self.iface_up
+            gw_ok = res["loss"] < 100.0
+            gw_rtt = res["rtt_avg"]
+            dns_ms = tcp_ms = None
+            http_ok = None
+        else:
+            # 1+2) os dois alvos de internet e o gateway vao JUNTOS, em paralelo.
+            # Em serie, um ciclo com o link caido custaria ~4,5s (tres esperas de
+            # timeout somadas) e o alerta demoraria. Em paralelo custa ~1,5s, que e
+            # o que permite confirmar uma queda em 3-4s.
+            f_a = self.pool.submit(ping, self.iface, PING_TARGETS[0])
+            f_b = self.pool.submit(ping, self.iface, PING_TARGETS[1])
+            f_gw = (self.pool.submit(ping, self.iface, self.gateway, 2, 0.25, 1)
+                    if self.gateway else None)
 
-        res = f_a.result()
-        alt = f_b.result()
-        # o alvo primario manda; o segundo so entra se o primario sumiu por
-        # completo, para nao mascarar perda parcial real do link
-        if (res["loss"] >= 100.0 or res["err"]) and not (alt["loss"] >= 100.0 or alt["err"]):
-            res = alt
+            res = f_a.result()
+            alt = f_b.result()
+            # o alvo primario manda; o segundo so entra se o primario sumiu por
+            # completo, para nao mascarar perda parcial real do link
+            if (res["loss"] >= 100.0 or res["err"]) and not (alt["loss"] >= 100.0 or alt["err"]):
+                res = alt
 
-        no_link = (res["err"] == "no_link" and alt["err"] == "no_link") or not self.iface_up
+            no_link = (res["err"] == "no_link" and alt["err"] == "no_link") or not self.iface_up
 
-        # gateway: distingue queda do provedor de queda do roteador local.
-        # 2 pacotes, nao 1: a ONT da GIGA descarta ~12% dos ICMP dirigidos a ela,
-        # e um unico pacote perdido apontaria "roteador local" sem motivo.
-        gw_ok, gw_rtt = False, None
-        if f_gw is not None:
-            g = f_gw.result()
-            gw_ok = g["loss"] < 100.0
-            gw_rtt = g["rtt_avg"]
+            # gateway: distingue queda do provedor de queda do roteador local.
+            # 2 pacotes, nao 1: a ONT da GIGA descarta ~12% dos ICMP dirigidos a ela,
+            # e um unico pacote perdido apontaria "roteador local" sem motivo.
+            gw_ok, gw_rtt = False, None
+            if f_gw is not None:
+                g = f_gw.result()
+                gw_ok = g["loss"] < 100.0
+                gw_rtt = g["rtt_avg"]
+
+            # 3) sondas secundarias
+            dns_ms = tcp_ms = None
+            http_ok = None
+            if self._cycle % EVERY_DNS == 0:
+                dns_ms = dns_probe(self.iface)
+            if self._cycle % EVERY_TCP == 0:
+                tcp_ms = tcp_probe(self.iface)
+            if self._cycle % EVERY_HTTP == 0:
+                http_ok = http_probe(self.iface)
+            if self._cycle == 1 or self._cycle % EVERY_EXTIP == 0:
+                self._consultar_ip_externo()
+
         self.gw_hist.append(gw_ok)
         del self.gw_hist[:-4]
         if not gw_ok and self.gateway:
             self._refresh_iface()
-
-        # 3) sondas secundarias
-        dns_ms = tcp_ms = None
-        http_ok = None
-        if self._cycle % EVERY_DNS == 0:
-            dns_ms = dns_probe(self.iface)
-        if self._cycle % EVERY_TCP == 0:
-            tcp_ms = tcp_probe(self.iface)
-        if self._cycle % EVERY_HTTP == 0:
-            http_ok = http_probe(self.iface)
 
         self.ewma_rtt = self._ewma(self.ewma_rtt, res["rtt_avg"])
         self.ewma_jitter = self._ewma(self.ewma_jitter, res["jitter"])
@@ -430,13 +588,20 @@ class LinkProbe(threading.Thread):
                 new_state = "NO_LINK" if no_link else "DOWN"
                 # o roteador local so e culpado se ficou mudo na janela inteira
                 gw_vivo = any(self.gw_hist)
-                cause = ("cabo" if no_link else
-                         "roteador_local" if not gw_vivo else "provedor")
+                if self.kind == "lan":
+                    # aqui nao existe provedor: ou a placa perdeu link, ou o
+                    # proprio roteador de casa parou de responder
+                    cause = "cabo" if no_link else "roteador_local"
+                else:
+                    cause = ("cabo" if no_link else
+                             "roteador_local" if not gw_vivo else "provedor")
                 # queda que comeca durante o teste de velocidade e nossa: num link
                 # de 6 Mbps saturado o ICMP morre. Fica registrada, mas marcada --
                 # e fora do relatorio que vai para a operadora
                 if ts < self.mudo_degradacao_ate and not no_link:
                     cause = "teste_velocidade"
+                if ts < self.troca_ate:
+                    cause = "troca_placa"
                 self.state = new_state
                 self.state_since = self.first_fail_ts
                 self.down_event_id = db.open_event(

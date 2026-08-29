@@ -42,7 +42,9 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS links (
   id      INTEGER PRIMARY KEY,
   name    TEXT NOT NULL UNIQUE,
-  iface   TEXT NOT NULL UNIQUE,
+  iface   TEXT NOT NULL,
+  kind    TEXT NOT NULL DEFAULT 'internet',
+  target  TEXT,
   enabled INTEGER NOT NULL DEFAULT 1
 );
 
@@ -113,9 +115,19 @@ DEFAULT_CONFIG = {
 
 # A identidade de cada link e a INTERFACE, nunca um IP: o gateway e o endereco
 # sao redetectados em runtime, entao trocar o cabo de rede nao quebra nada.
+# O que esta aqui e so o PADRAO da primeira instalacao. Depois disso quem manda
+# e a coluna `iface` da tabela, editavel em Configuracoes -- o adaptador USB vai
+# ser trocado por um modelo melhor e o nome da interface muda junto.
 #   eth0             -> ONT da GIGA (192.168.18.1)
 #   enx00e04c534458  -> adaptador USB ligado ao roteador da IMPACTO (192.168.17.1)
-LINKS = [(1, "GIGA", "eth0"), (2, "IMPACTO", "enx00e04c534458")]
+#   enx6c1ff7202a49  -> terceira placa, na LAN do roteador de casa
+# kind='lan' nao mede internet: mede a latencia ate um alvo da rede local (o
+# roteador), o que separa "a internet caiu" de "a minha rede caiu".
+LINKS = [
+    (1, "GIGA", "eth0", "internet", None),
+    (2, "IMPACTO", "enx00e04c534458", "internet", None),
+    (3, "ROTEADOR", "enx6c1ff7202a49", "lan", "192.168.200.254"),
+]
 
 
 def _tune(conn):
@@ -137,16 +149,58 @@ def connect(readonly=False):
     return conn
 
 
+def _migrar_links(conn):
+    """Traz a tabela `links` de instalacoes antigas para o schema atual.
+
+    A versao antiga tinha UNIQUE em `iface` e nao tinha kind/target. O UNIQUE
+    precisa sair: trocar a interface da GIGA pela que estava na IMPACTO passaria
+    pelo estado intermediario em que as duas apontam para a mesma placa, e o
+    banco recusaria a troca no meio do caminho. SQLite nao remove constraint,
+    entao a tabela e reconstruida.
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(links)")}
+    if not cols:
+        return
+    sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='links'"
+    ).fetchone()
+    linha_iface = next((ln for ln in ((sql["sql"] if sql else "") or "").splitlines()
+                        if "iface" in ln), "")
+    tem_unique = "UNIQUE" in linha_iface.upper()
+    if {"kind", "target"} <= cols and not tem_unique:
+        return
+    log.warning("migrando a tabela links para o schema novo")
+    conn.executescript("""
+      CREATE TABLE links_novo (
+        id      INTEGER PRIMARY KEY,
+        name    TEXT NOT NULL UNIQUE,
+        iface   TEXT NOT NULL,
+        kind    TEXT NOT NULL DEFAULT 'internet',
+        target  TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1
+      );
+    """)
+    conn.execute(
+        "INSERT INTO links_novo(id,name,iface,kind,target,enabled) "
+        "SELECT id,name,iface,%s,%s,enabled FROM links"
+        % ("kind" if "kind" in cols else "'internet'",
+           "target" if "target" in cols else "NULL"))
+    conn.executescript("DROP TABLE links; ALTER TABLE links_novo RENAME TO links;")
+
+
 def init():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = connect()
     try:
         conn.executescript(SCHEMA)
-        for lid, name, iface in LINKS:
+        _migrar_links(conn)
+        for lid, name, iface, kind, target in LINKS:
+            # so o nome e o tipo sao reafirmados a cada boot; iface e target sao
+            # do usuario a partir do momento em que ele os escolhe na interface
             conn.execute(
-                "INSERT INTO links(id,name,iface) VALUES(?,?,?) "
-                "ON CONFLICT(id) DO UPDATE SET name=excluded.name, iface=excluded.iface",
-                (lid, name, iface),
+                "INSERT INTO links(id,name,iface,kind,target) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET name=excluded.name, kind=excluded.kind",
+                (lid, name, iface, kind, target),
             )
         for k, v in DEFAULT_CONFIG.items():
             conn.execute("INSERT OR IGNORE INTO config(key,value) VALUES(?,?)", (k, v))
@@ -154,6 +208,70 @@ def init():
         log.info("banco pronto em %s", DB_PATH)
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------------
+# Links (interface, tipo e alvo) e memoria de longo prazo
+# --------------------------------------------------------------------------
+_links_lock = threading.Lock()
+
+
+def list_links(apenas_ativos=True):
+    conn = connect(readonly=True)
+    try:
+        sql = "SELECT id,name,iface,kind,target,enabled FROM links"
+        if apenas_ativos:
+            sql += " WHERE enabled=1"
+        return [dict(r) for r in conn.execute(sql + " ORDER BY id")]
+    finally:
+        conn.close()
+
+
+def link_ids(kind=None):
+    """{NOME: id} - substitui os {'GIGA':1,'IMPACTO':2} espalhados pelo codigo."""
+    return {l["name"]: l["id"] for l in list_links()
+            if kind is None or l["kind"] == kind}
+
+
+def set_link(link_id, iface=None, target=None):
+    with _links_lock:
+        conn = connect()
+        try:
+            if iface is not None:
+                conn.execute("UPDATE links SET iface=? WHERE id=?", (iface, link_id))
+            if target is not None:
+                conn.execute("UPDATE links SET target=? WHERE id=?",
+                             (target or None, link_id))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_meta(key, padrao=None):
+    conn = connect(readonly=True)
+    try:
+        r = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        if not r:
+            return padrao
+        try:
+            return json.loads(r["value"])
+        except ValueError:
+            return r["value"]
+    finally:
+        conn.close()
+
+
+def set_meta(key, value):
+    with _links_lock:
+        conn = connect()
+        try:
+            conn.execute(
+                "INSERT INTO meta(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, json.dumps(value, ensure_ascii=False)))
+            conn.commit()
+        finally:
+            conn.close()
 
 
 # --------------------------------------------------------------------------
@@ -500,6 +618,7 @@ def reset(escopo="historico"):
                 "DELETE FROM sqlite_sequence WHERE name IN ('events','speedtests')")
         except sqlite3.Error:
             pass                      # a tabela so existe se ja houve AUTOINCREMENT
+        conn.execute("DELETE FROM meta WHERE key LIKE 'ip_externo:%'")
         if escopo == "tudo":
             conn.execute("DELETE FROM config")
             for k, v in DEFAULT_CONFIG.items():

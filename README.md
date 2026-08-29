@@ -41,10 +41,12 @@ graph LR
     subgraph casa[" "]
         OP["🌐 Roteador da operadora<br/>GIGA · 192.168.18.1"]
         RP["🌐 Roteador principal<br/>IMPACTO · 192.168.17.1"]
+        LAN["🏠 Meu roteador<br/>192.168.200.254"]
         PI["🍊 Orange Pi 3 LTS<br/><b>netmon</b> + Pi-hole"]
     end
     OP -- "eth0 · rota padrão" --> PI
     RP -- "USB LAN · never-default" --> PI
+    LAN -- "USB LAN · só latência" --> PI
     PI --> PAINEL["📊 painel na porta 666<br/>qualquer aparelho da LAN"]
 ```
 
@@ -54,7 +56,18 @@ a volta com NAT duplo. Por isso cada sonda é **presa à interface**
 número medido é do link certo, sempre.
 
 Trocar o cabo de lugar não quebra nada: IP e gateway são redetectados a cada
-60 s. A identidade de um link é a **interface**, nunca um IP.
+60 s. A identidade de um link é a **interface**, nunca um IP — e a interface de
+cada link é escolhida **na página**, em Configurações → Placas de rede. Trocar o
+adaptador USB por outro modelo é mudar um `<select>`: vale na hora, sem
+reiniciar, e o histórico continua sendo do link, não da placa. A queda de
+segundos entre uma placa e outra fica marcada como `troca_placa` e **não conta**
+contra a operadora.
+
+A terceira placa não mede internet: ela mede a **latência até o roteador de
+casa** (`192.168.200.254`). É o que separa "a operadora caiu" de "a minha rede
+caiu" — se a linha do ROTEADOR sobe junto com as outras duas, o problema é aqui
+dentro. Esse link aparece no card de baixo, marcado como `LAN`, e fica fora dos
+relatórios que vão para a operadora.
 
 ## O que ele faz
 
@@ -103,6 +116,13 @@ próprio aparelho, gráficos em SVG desenhados na unha.
 | TCP handshake :443 | 30 s | confirma que não é só ICMP passando |
 | HTTP 204 | 60 s | pega bloqueio e portal cativo |
 | Redetecção de IP e gateway | 60 s | sobrevive a troca de cabo e de rede |
+| IP externo (TLS em `1.1.1.1/cdn-cgi/trace`) | 5 min | o IP público **de cada link**, e o aviso quando ele muda |
+| ICMP até o roteador de casa (link `LAN`) | 2 s | separa problema da operadora de problema da rede interna |
+
+O IP externo sai preso à interface, então cada link responde com o endereço que
+o mundo realmente vê saindo por ele — é o número que a operadora pede no
+atendimento. Ele é guardado no banco: depois de um restart o card já abre
+preenchido, e uma troca de IP vai para o log.
 
 As três sondas ICMP de cada ciclo rodam **juntas**. Em série, um ciclo com o
 link caído custaria ~4,6 s de timeouts somados; em paralelo custa ~1,5 s — é o
@@ -125,6 +145,13 @@ Um botão por internet. Download e upload reais, com o soquete preso à interfac
   **fora do relatório da operadora** — num link de 6 Mbps saturado o ICMP morre,
   e isso é culpa nossa, não dela.
 
+Todo teste, inclusive os que falharam, fica no **log de testes de velocidade**,
+logo abaixo dos botões: hora, link, download, upload, ping, jitter, servidor
+usado e o erro quando houve. Dá para filtrar por link e baixar tudo em CSV
+(`;` como separador e vírgula decimal, do jeito que o Excel brasileiro espera).
+Medir a velocidade do link `LAN` é recusado de propósito: mediria o cabo de
+casa, não a internet contratada.
+
 ## Quando dispara alerta
 
 - **QUEDA** — 2 ciclos com 100% de perda nos dois alvos (~4 s).
@@ -145,7 +172,8 @@ Requisitos: Linux, **Python 3.10+** e duas interfaces de rede. Só isso.
 ```bash
 git clone https://github.com/cleber-son/monitoramento-dual-internet-orangepi.git netmon
 cd netmon
-# ajuste os nomes das interfaces em db.py (LINKS)
+# os nomes de interface em db.py (LINKS) são só o padrão da primeira instalação;
+# depois disso a escolha é feita na página, em Configurações → Placas de rede
 ./run.sh
 ```
 
@@ -192,13 +220,17 @@ página avisa no rodapé.
 
 | Rota | O que devolve |
 |---|---|
-| `GET /api/status` | estado atual dos 2 links, uptime 24h/7d/30d, evento aberto |
+| `GET /api/status` | estado atual de cada link, IP externo, uptime 24h/7d/30d, evento aberto |
 | `GET /api/samples?link=&from=&to=&res=auto` | série temporal (`raw`/`minute`/`hour`) |
 | `GET /api/events?link=&tipo=&limit=&offset=` | histórico de quedas com duração |
 | `GET /api/summary?period=24h` | uptime, nº de quedas, downtime, rtt, jitter, perda |
 | `GET /api/speedtest?link=&limit=` | último teste de cada link, histórico e o que está rodando |
 | `POST /api/speedtest` | dispara o teste: `{"link":"GIGA","dur":5}` — `409` se já houver um |
+| `GET /api/speedtest.csv?link=` | o log inteiro dos testes em CSV |
 | `GET /api/config` · `POST /api/config` | limiares, webhook, som |
+| `GET /api/links` | links, a placa de cada um e todas as placas do sistema |
+| `POST /api/links` | troca a placa (e o alvo do link LAN) ao vivo: `{"links":{"GIGA":{"iface":"eth0"}}}` |
+| `GET /api/ifaces` | só as placas de rede, com IP, gateway, USB e estado do cabo |
 | `POST /api/webhook/test` | dispara um payload de teste |
 | `GET /api/stream` | SSE ao vivo (`status` a cada 2 s, `alerta` na hora) |
 | `GET /api/report.pdf?period=24h&link=GIGA` | relatório em PDF; com `link`, só as quedas daquele link |

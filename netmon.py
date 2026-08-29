@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""netmon - monitor dos links de internet GIGA e IMPACTO.
+"""netmon - monitor dos links GIGA e IMPACTO e da latencia ate o roteador.
 
 Processo unico, somente biblioteca padrao do Python 3.10.
-Threads: 2 sondas + escritor do banco + manutencao + difusor SSE + servidor HTTP.
+Threads: uma sonda por link + escritor do banco + manutencao + difusor SSE +
+servidor HTTP.
 """
 
 import logging
@@ -118,15 +119,10 @@ def main():
     }
 
     probes = []
-    conn = db.connect(readonly=True)
-    try:
-        rows = conn.execute(
-            "SELECT id,name,iface FROM links WHERE enabled=1 ORDER BY id").fetchall()
-    finally:
-        conn.close()
-    for r in rows:
+    for r in db.list_links():
         probes.append(probe_mod.LinkProbe(r["id"], r["name"], r["iface"],
-                                          writer, alerts, stop))
+                                          writer, alerts, stop,
+                                          kind=r["kind"], target=r["target"]))
     app["probes"] = probes
     alerts.probes = probes
 

@@ -1,5 +1,6 @@
 """Monta o relatorio PDF do netmon a partir dos dados do banco."""
 
+import collections
 import time
 from datetime import datetime
 
@@ -9,10 +10,11 @@ import pdf
 
 # Paleta em versao CLARA: o PDF e impresso/lido sobre branco, entao usamos os
 # passos claros do sistema de design, nao os do tema escuro da tela.
-COR = {
+# dict com padrao: se um link for renomeado, o PDF sai em cinza em vez de quebrar
+COR = collections.defaultdict(lambda: (0.35, 0.35, 0.33), {
     "GIGA": (0.165, 0.471, 0.839),      # #2a78d6
     "IMPACTO": (0.922, 0.408, 0.204),   # #eb6834
-}
+})
 TINTA = (0.043, 0.043, 0.043)           # #0b0b0b
 TINTA2 = (0.322, 0.318, 0.306)          # #52514e
 FRACO = (0.537, 0.529, 0.506)           # #898781
@@ -66,11 +68,12 @@ def _serie(link_id, frm, to):
 def _eventos(frm, to, link=None):
     conn = db.connect(readonly=True)
     try:
-        # a queda provocada pelo nosso proprio teste de velocidade nao entra no
-        # relatorio: ele existe para provar falha da operadora, nao a nossa
+        # nem a queda provocada pelo nosso teste de velocidade nem a da troca de
+        # placa entram: o relatorio existe para provar falha da operadora, e
+        # essas duas foram nossas
         sql = ("SELECT e.*, l.name link FROM events e JOIN links l ON l.id=e.link_id "
                "WHERE e.started_at<=? AND COALESCE(e.ended_at,?)>=? "
-               "AND COALESCE(e.cause,'') <> 'teste_velocidade' ")
+               "AND COALESCE(e.cause,'') NOT IN ('teste_velocidade','troca_placa') ")
         params = [to, int(time.time()), frm]
         if link:
             sql += "AND l.name=? "
@@ -94,7 +97,8 @@ def _rodape(pag, link=None):
     y = pdf.A4[1] - 34
     pag.linha(MARGEM, y - 10, pdf.A4[0] - MARGEM, y - 10, GRADE, 0.8)
     # num relatorio de um link so, citar a outra operadora no rodape e ruido
-    assunto = ("do link %s" % link) if link else "dos links GIGA e IMPACTO"
+    assunto = ("do link %s" % link) if link else ("dos links %s" % " e ".join(
+        sorted(links_do_relatorio())))
     pag.texto(MARGEM, y, "netmon - monitoramento continuo %s" % assunto, 8, cor=FRACO)
     pag.texto(pdf.A4[0] - MARGEM, y, "gerado em %s" % _dt(time.time()), 8,
               cor=FRACO, alinhamento="dir")
@@ -205,7 +209,8 @@ def _grafico_latencia(pag, y, series, eventos, frm, to, altura=170):
     return y1 + 40
 
 
-def _timeline(pag, y, series, eventos, frm, to, nomes=("GIGA", "IMPACTO")):
+def _timeline(pag, y, series, eventos, frm, to, nomes=None):
+    nomes = nomes or sorted(series)
     pag.texto(MARGEM, y, "Disponibilidade", 10.5, negrito=True, cor=TINTA)
     y += 16
     N = 80
@@ -289,7 +294,11 @@ def _tabela_eventos(doc, eventos, titulo_sub, pagina_ini, total_paginas, link=No
 
 
 # ---------------------------------------------------------------------------
-LINK_ID = {"GIGA": 1, "IMPACTO": 2}
+# O relatorio e o documento que vai para a OPERADORA: so entram links de
+# internet. A latencia ate o roteador de casa e diagnostico interno e nao prova
+# nada contra o provedor.
+def links_do_relatorio():
+    return db.link_ids("internet")
 
 
 def _caixa_prova(pag, y, nome, r, eventos):
@@ -328,11 +337,12 @@ def gerar(period="24h", frm=None, to=None, link=None):
         span = PERIODOS.get(period, 86400)
         to, frm = agora, agora - span
     rotulo = NOME_PERIODO.get(period, "periodo personalizado")
-    nomes = [link] if link else ["GIGA", "IMPACTO"]
+    ids = links_do_relatorio()
+    nomes = [link] if link else sorted(ids, key=lambda n: ids[n])
 
-    resumos = {n: server.resumo_link(LINK_ID[n], frm, to) for n in nomes}
+    resumos = {n: server.resumo_link(ids[n], frm, to) for n in nomes}
     eventos = _eventos(frm, to, link)
-    series = {n: _serie(LINK_ID[n], frm, to) for n in nomes}
+    series = {n: _serie(ids[n], frm, to) for n in nomes}
 
     # mesma aritmetica que _tabela_eventos usa para quebrar as paginas
     total_pag = 1 + max(1, -(-len(eventos) // LINHAS_POR_PAGINA))

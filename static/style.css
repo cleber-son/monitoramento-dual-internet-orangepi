@@ -134,9 +134,14 @@ main {
 .btn-per.ativo { color: #fff; background: #1c5cab; border-color: #256abf; }
 
 /* ------------------------------------------------------------ cards */
+/* Duas colunas iguais e fixas: GIGA e IMPACTO ficam com 50% da linha cada,
+   lado a lado, do mesmo tamanho. Com `auto-fit` a contagem de colunas mudava
+   conforme a largura da tela e os dois cards nunca batiam exatamente meio a
+   meio. O `minmax(0, 1fr)` é o que impede um IP comprido de esticar a coluna
+   dele e roubar espaço da outra. O card do ROTEADOR atravessa as duas. */
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   margin-bottom: 18px;
 }
@@ -198,9 +203,10 @@ main {
 .card-rodape b { color: var(--ink-2); font-weight: 550; font-variant-numeric: tabular-nums; }
 
 /* ------------------------------------------------------------ velocidade */
+/* mesma divisão dos cards de status: um link em cada metade da linha */
 .vel-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   margin-top: 12px;
 }
@@ -385,6 +391,7 @@ main {
 .tag-QUEDA { background: rgba(208,59,59,.18); color: #ff9b9b; }
 .tag-LATENCIA_ALTA { background: rgba(250,178,25,.16); color: #ffd479; }
 .tag-aberto { background: rgba(208,59,59,.3); color: #fff; }
+.tag-lan { background: rgba(138,111,224,.20); color: #c3b3f5; letter-spacing: .04em; }
 .ponto-link { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 7px; vertical-align: baseline; }
 
 .paginacao { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
@@ -404,7 +411,8 @@ details[open] summary::before { content: "▾ "; }
 .campo { display: flex; flex-direction: column; gap: 5px; font-size: 0.8rem; color: var(--muted); }
 .campo-largo { grid-column: 1 / -1; }
 .campo-check { flex-direction: row; align-items: center; gap: 8px; color: var(--ink-2); }
-.campo input[type="url"], .campo input[type="number"], .campo select {
+.campo input[type="url"], .campo input[type="number"],
+.campo input[type="text"], .campo select {
   font: inherit;
   font-size: 0.86rem;
   color: var(--ink);
@@ -513,7 +521,8 @@ body { overflow-x: hidden; }
   .periodos::-webkit-scrollbar { display: none; }
   .btn-per { flex: 1 0 auto; }
 
-  .cards { grid-template-columns: 1fr; gap: 12px; }
+  /* no celular as duas metades viram duas linhas: 50% de 360px não cabe */
+  .cards, .vel-grid { grid-template-columns: 1fr; gap: 12px; }
   .card-metricas { grid-template-columns: repeat(2, 1fr); gap: 12px; }
   .met-valor { font-size: 1.3rem; }
   .card-rodape {
@@ -580,6 +589,51 @@ body { overflow-x: hidden; }
   #tab-eventos td.vazio::before { content: none; }
   /* só os eventos deixam de rolar: eles viraram cartões. A tabela de
      estatísticas continua com rolagem própria para não estourar a tela. */
+  /* --- o log dos testes segue a mesma regra: cartões no celular --- */
+  #tab-vel thead { display: none; }
+  #tab-vel, #tab-vel tbody { display: block; }
+  #tab-vel tbody tr {
+    display: block;
+    background: var(--surface-2);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 11px 13px;
+    margin-bottom: 10px;
+  }
+  #tab-vel tbody tr:hover td { background: none; }
+  #tab-vel td {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 14px;
+    border: none;
+    padding: 4px 0;
+    white-space: normal;
+    text-align: right;
+  }
+  #tab-vel td::before {
+    content: attr(data-rot);
+    color: var(--muted);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    flex: none;
+  }
+  #tab-vel td[data-rot="Quando"] {
+    font-size: 1rem;
+    font-weight: 650;
+    color: var(--ink);
+    padding-bottom: 8px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--borda);
+  }
+  #tab-vel td.vazio { display: block; text-align: center; padding: 18px 0; }
+  #tab-vel td.vazio::before { content: none; }
+  /* só os eventos deixam de rolar: eles viraram cartões. A tabela de
+     estatísticas continua com rolagem própria para não estourar a tela. */
+  .wrap-vellog { overflow-x: visible; max-height: none; }
+  #tab-vel td.vazio { display: block; }
+
   .wrap-eventos { overflow-x: visible; }
 
   /* --- tabela de estatísticas: cabe em 3 colunas, só aperta o passo --- */
@@ -607,7 +661,7 @@ body { overflow-x: hidden; }
   #btn-fechar-alerta { order: 0; margin-left: auto; min-height: 0; padding: 4px 8px; }
   #btn-silenciar { order: 2; flex: 1 1 100%; }
 
-  .config-grid { grid-template-columns: 1fr; }
+  .config-grid, .ifaces-grid { grid-template-columns: 1fr; }
   .config-acoes .btn { flex: 1; }
 }
 
@@ -621,4 +675,54 @@ body { overflow-x: hidden; }
 
 @media (prefers-reduced-motion: reduce) {
   .b-DOWN { animation: none; }
+}
+
+
+/* --------------------------------------------------- link de rede local
+   O card do roteador fica embaixo, ocupando a linha inteira: ele responde
+   "o problema é a minha rede ou é a operadora?", e não compete com os dois
+   links de internet pela atenção de quem abre a página. */
+.card-lan {
+  grid-column: 1 / -1;
+  border-style: dashed;
+  background: linear-gradient(180deg, rgba(138,111,224,.05), transparent 60%), var(--surface);
+}
+.card-lan .card-metricas { max-width: 640px; }
+.ip-externo b { color: var(--ink); }
+
+/* --------------------------------------------------- placas de rede */
+.config-titulo {
+  font-size: 0.94rem;
+  font-weight: 640;
+  margin: 18px 0 2px;
+}
+.config-titulo:first-of-type { margin-top: 8px; }
+.ifaces-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px;
+  margin: 12px 0 16px;
+}
+.iface-item {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--borda);
+  border-left: 3px solid var(--cor-link, var(--muted));
+  border-radius: var(--raio);
+  background: var(--surface-2);
+}
+.iface-topo { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; }
+.iface-topo .muted { font-size: 0.76rem; margin-left: auto; }
+
+/* --------------------------------------------------- log dos testes */
+.vel-log { margin-top: 22px; border-top: 1px solid var(--borda); padding-top: 16px; }
+.vel-log h3 { font-size: 0.94rem; font-weight: 640; }
+.wrap-vellog { max-height: 380px; overflow-y: auto; }
+.wrap-vellog thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 1;
 }

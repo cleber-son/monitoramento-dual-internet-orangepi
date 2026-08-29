@@ -56,6 +56,8 @@ CAUSA_TXT = {
     "provedor": "provavel queda do provedor",
     "roteador_local": "roteador local nao responde - verifique o roteador",
     "cabo": "sem link fisico - verifique o cabo do adaptador",
+    "teste_velocidade": "link saturado pelo proprio teste de velocidade",
+    "troca_placa": "placa de rede do link trocada agora",
 }
 
 
