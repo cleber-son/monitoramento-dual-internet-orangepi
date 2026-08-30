@@ -1,28 +1,47 @@
-/* netmon — tema escuro. Paleta do sistema de design (slots categóricos 1 e 2). */
+/* netmon — tema escuro, base azul-ardósia.
+   A paleta anterior era quase preta e sem matiz: tudo lia como "escuro" e nada
+   tinha cor própria. Aqui o plano tem azul de verdade, as superfícies sobem em
+   degraus visíveis e os categóricos são mais claros e saturados, para aguentar
+   o fundo escuro. Todos os pares texto/fundo passam em WCAG AA. */
 
 :root {
   color-scheme: dark;
 
-  --plano:        #0d0d0d;   /* fundo da página */
-  --surface:      #1a1a19;   /* superfície dos painéis e gráficos */
-  --surface-2:    #232322;
-  --ink:          #ffffff;
-  --ink-2:        #c3c2b7;
-  --muted:        #898781;
-  --grid:         #2c2c2a;
-  --eixo:         #383835;
-  --borda:        rgba(255, 255, 255, 0.10);
+  /* A base era quase preta e sem matiz nenhum: tudo aparecia como "escuro" e
+     nada tinha cor própria. Agora o fundo tem um azul-ardósia de verdade e as
+     superfícies sobem em degraus visíveis — o painel se destaca do plano, o
+     campo se destaca do painel, sem precisar de borda forte. */
+  --plano:        #111a2b;   /* fundo da página */
+  --plano-2:      #17223a;   /* topo e rodapé, um degrau acima */
+  --surface:      #1d2942;   /* painéis e cards */
+  --surface-2:    #283857;   /* campos, botões, superfícies internas */
+  --surface-3:    #33466c;   /* hover */
 
-  --giga:         #3987e5;   /* categórico slot 1 */
-  --impacto:      #d95926;   /* categórico slot 2 */
+  --ink:          #f2f6ff;
+  --ink-2:        #cbd6ea;
+  --muted:        #93a3c0;   /* era #898781: cinza morto e escuro demais */
+  --grid:         #2b3a57;
+  --eixo:         #465c85;
+  --borda:        rgba(160, 190, 240, 0.20);
+  --borda-forte:  rgba(150, 180, 235, 0.32);
 
-  --good:         #0ca30c;
-  --warning:      #fab219;
-  --serious:      #ec835a;
-  --critical:     #d03b3b;
-  --sem-dado:     #3a3a38;
+  /* Categóricos mais saturados e mais claros: no fundo escuro os antigos
+     ficavam abafados, principalmente o laranja. */
+  --giga:         #4da3ff;
+  --impacto:      #ff7a45;
+  --roteador:     #a98bff;
 
-  --raio: 10px;
+  --good:         #2ecc71;
+  --good-2:       #8ef0b6;
+  --warning:      #ffc531;
+  --serious:      #ff9d5c;
+  --critical:     #ff5a5a;
+  --sem-dado:     #33415c;
+
+  --acento:       #4da3ff;
+  --acento-2:     #7c5cff;
+
+  --raio: 12px;
   --fonte: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
@@ -32,6 +51,10 @@ html, body {
   margin: 0;
   padding: 0;
   background: var(--plano);
+  background-image:
+    radial-gradient(1100px 520px at 12% -8%, rgba(77, 163, 255, .13), transparent 62%),
+    radial-gradient(900px 460px at 92% 0%, rgba(124, 92, 255, .11), transparent 60%);
+  background-attachment: fixed;
   color: var(--ink);
   font-family: var(--fonte);
   font-size: 15px;
@@ -55,6 +78,9 @@ main {
 
 /* ------------------------------------------------------------ topo */
 .topo {
+  border-bottom: 1px solid var(--borda);
+  background: linear-gradient(90deg,
+    rgba(77,163,255,.10), rgba(124,92,255,.08) 45%, rgba(255,122,69,.08));
   max-width: 1180px;
   margin: 0 auto;
   padding: 20px 16px 14px;
@@ -76,9 +102,9 @@ main {
   color: var(--ink-2);
   white-space: nowrap;
 }
-.pill-on  { color: #baf0ba; border-color: rgba(12,163,12,.5); background: rgba(12,163,12,.14); }
-.pill-off { color: #f3c0c0; border-color: rgba(208,59,59,.5); background: rgba(208,59,59,.14); }
-.pill-neutro { color: #b9c2cf; border-color: rgba(160,170,185,.4); background: rgba(160,170,185,.12); }
+.pill-on  { color: #8ef0b6; border-color: rgba(46,204,113,.55); background: rgba(46,204,113,.16); }
+.pill-off { color: #ffb3b3; border-color: rgba(255,90,90,.55); background: rgba(255,90,90,.18); }
+.pill-neutro { color: var(--ink-2); border-color: var(--borda-forte); background: rgba(147,163,192,.14); }
 
 /* ------------------------------------------------------------ alerta */
 .alerta {
@@ -89,12 +115,12 @@ main {
   align-items: center;
   gap: 12px;
   padding: 11px 16px;
-  background: #3a1414;
-  border-bottom: 1px solid rgba(208, 59, 59, .55);
+  background: linear-gradient(90deg, #5c1520, #7a1c28);
+  border-bottom: 2px solid #ff5a5a;
   box-shadow: 0 6px 22px rgba(0, 0, 0, .5);
 }
-.alerta.aviso { background: #3a2f10; border-bottom-color: rgba(250, 178, 25, .55); }
-.alerta.ok    { background: #12300f; border-bottom-color: rgba(12, 163, 12, .55); }
+.alerta.aviso { background: linear-gradient(90deg, #5a4410, #6e5514); border-bottom-color: #ffc531; }
+.alerta.ok    { background: linear-gradient(90deg, #12452c, #176038); border-bottom-color: #2ecc71; }
 .alerta.oculto { display: none; }
 .alerta-icone { font-size: 1.15rem; }
 .alerta-texto { display: flex; flex-direction: column; min-width: 0; flex: 1; }
@@ -113,11 +139,11 @@ main {
   cursor: pointer;
   white-space: nowrap;
 }
-.btn:hover:not(:disabled) { background: #2e2e2c; color: var(--ink); }
+.btn:hover:not(:disabled) { background: var(--surface-3); color: var(--ink); border-color: var(--borda-forte); }
 .btn:disabled { opacity: .4; cursor: default; }
 .btn-ghost { background: transparent; }
-.btn-primario { background: #1c5cab; border-color: #256abf; color: #fff; }
-.btn-primario:hover { background: #256abf; }
+.btn-primario { background: linear-gradient(180deg, #4da3ff, #2f7ae0); border-color: #66b2ff; color: #06121f; font-weight: 650; }
+.btn-primario:hover { background: linear-gradient(180deg, #6bb4ff, #3d88ea); }
 
 .periodos { display: flex; gap: 4px; flex-wrap: wrap; }
 .btn-per {
@@ -147,11 +173,22 @@ main {
   margin-bottom: 18px;
 }
 .card {
+  /* Duas declarações de propósito. A segunda usa `color-mix` para tingir o card
+     com a cor do próprio link — dá para saber de qual internet é o card pelo
+     canto do olho, sem ler o nome. Navegador que não conheça `color-mix`
+     descarta a declaração inteira, e sem a primeira o card ficaria SEM FUNDO,
+     transparente sobre a página. */
   background: var(--surface);
+  background:
+    linear-gradient(135deg,
+      color-mix(in srgb, var(--cor-link, #4da3ff) 14%, transparent),
+      rgba(255,255,255,0) 55%),
+    var(--surface);
   border: 1px solid var(--borda);
   border-left: 4px solid var(--cor-link, var(--muted));
   border-radius: var(--raio);
   padding: 15px 16px;
+  box-shadow: 0 1px 0 rgba(255,255,255,.04) inset;
 }
 .card-topo { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; }
 .card-nome { font-size: 1.06rem; font-weight: 680; letter-spacing: .01em; }
@@ -163,10 +200,10 @@ main {
   border-radius: 999px;
   letter-spacing: .03em;
 }
-.e-UP        { background: rgba(12,163,12,.16);  color: #7ee07e; }
-.e-DEGRADED  { background: rgba(250,178,25,.16); color: #ffd479; }
-.e-DOWN      { background: rgba(208,59,59,.18);  color: #ff9b9b; }
-.e-NO_LINK   { background: rgba(137,135,129,.18);color: #cfcdc6; }
+.e-UP        { background: rgba(46,204,113,.18); color: #8ef0b6; box-shadow: inset 0 0 0 1px rgba(46,204,113,.35); }
+.e-DEGRADED  { background: rgba(255,197,49,.18); color: #ffe08a; box-shadow: inset 0 0 0 1px rgba(255,197,49,.38); }
+.e-DOWN      { background: rgba(255,90,90,.20);  color: #ffb3b3; box-shadow: inset 0 0 0 1px rgba(255,90,90,.42); }
+.e-NO_LINK   { background: rgba(147,163,192,.18);color: #d5deee; box-shadow: inset 0 0 0 1px rgba(147,163,192,.32); }
 
 .bolinha { width: 11px; height: 11px; border-radius: 50%; flex: none; background: var(--muted); }
 .b-UP { background: var(--good); }
@@ -262,11 +299,31 @@ main {
 
 /* ------------------------------------------------------------ painéis */
 .painel {
-  background: var(--surface);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,0) 120px),
+    var(--surface);
   border: 1px solid var(--borda);
   border-radius: var(--raio);
   padding: 16px;
   margin-bottom: 16px;
+}
+/* Cada seção ganha uma barrinha de acento antes do título: dá ritmo à página e
+   torna possível achar uma seção rolando, o que antes exigia ler todos os h2. */
+.painel > h2:first-child,
+.painel .painel-topo h2,
+.painel > details > summary h2 {
+  position: relative;
+  padding-left: 12px;
+}
+.painel > h2:first-child::before,
+.painel .painel-topo h2::before,
+.painel > details > summary h2::before {
+  content: "";
+  position: absolute;
+  left: 0; top: .18em; bottom: .18em;
+  width: 4px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, var(--acento), var(--acento-2));
 }
 .painel-topo {
   display: flex;
@@ -282,18 +339,25 @@ main {
 .legenda-status { margin-top: 12px; }
 .leg { display: inline-flex; align-items: center; gap: 6px; }
 .sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
-.sw-queda { background: rgba(208, 59, 59, .35); border: 1px solid var(--critical); }
+.sw-queda { background: rgba(255, 90, 90, .35); border: 1px solid var(--critical); }
 
 /* ------------------------------------------------------------ gráficos */
 .grafico-wrap { position: relative; width: 100%; }
-.grafico { display: block; width: 100%; height: 280px; }
+.grafico {
+  display: block; width: 100%; height: 280px;
+  background: rgba(10, 16, 30, .40);
+  border: 1px solid var(--borda);
+  border-radius: 9px;
+}
 .grafico-baixo { height: 150px; }
 
 .tooltip {
   position: absolute;
   pointer-events: none;
-  background: #000;
-  border: 1px solid var(--borda);
+  /* opaco de propósito: o tooltip fica por cima das linhas do gráfico, e com
+     fundo translúcido os números ficam ilegíveis exatamente onde há dado */
+  background: #0b1220;
+  border: 1px solid var(--borda-forte);
   border-radius: 8px;
   padding: 8px 10px;
   font-size: 0.78rem;
@@ -327,7 +391,7 @@ main {
 .tabela th { color: var(--muted); font-weight: 550; font-size: 0.76rem; text-transform: uppercase; letter-spacing: .04em; }
 .tabela td { font-variant-numeric: tabular-nums; color: var(--ink-2); }
 .tabela td:first-child, .tabela th:first-child { white-space: normal; }
-.tabela tbody tr:hover td { background: rgba(255, 255, 255, .03); }
+.tabela tbody tr:hover td { background: rgba(77, 163, 255, .09); }
 .tabela .destaque { color: var(--ink); font-weight: 600; }
 
 /* --- estatísticas: cor de status para qualidade, cor do link para identidade */
@@ -747,8 +811,9 @@ body { overflow-x: hidden; }
 }
 .btn-per { font-size: 0.88rem; padding: 7px 14px; font-weight: 600; }
 .btn-per.ativo {
-  background: #2f7ae0; border-color: #4a93f0; color: #fff;
-  box-shadow: 0 0 0 2px rgba(47,122,224,.28);
+  background: linear-gradient(180deg, #4da3ff, #2f7ae0);
+  border-color: #7cc0ff; color: #06121f;
+  box-shadow: 0 0 0 3px rgba(77,163,255,.24);
 }
 
 /* ------------------------------------------------------------ perda */
@@ -763,12 +828,12 @@ body { overflow-x: hidden; }
 .perda-resumo { font-size: 0.76rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .perda-eixo { display: flex; justify-content: space-between; font-size: 0.7rem; color: var(--muted); margin-left: 102px; }
 .perda-legenda { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; font-size: 0.76rem; color: var(--muted); }
-.sw-p0 { background: #2f6f3f; }
-.sw-p1 { background: #c9a227; }
-.sw-p2 { background: #e07b39; }
-.sw-p3 { background: #d64545; }
-.sw-p4 { background: #8f1f1f; }
-.sw-psem { background: #3a3a37; }
+.sw-p0 { background: #2f8f5b; }
+.sw-p1 { background: #e0b52e; }
+.sw-p2 { background: #ff8f43; }
+.sw-p3 { background: #ff5a5a; }
+.sw-p4 { background: #b81f3a; }
+.sw-psem { background: #33415c; }
 
 @media (max-width: 560px) {
   .perda-linha { grid-template-columns: 68px 1fr; }
@@ -787,8 +852,8 @@ h2.inline, h3.inline { display: inline; }
 
 .tag-auto {
   font-size: 0.68rem; padding: 2px 7px; border-radius: 999px;
-  background: rgba(47,122,224,.16); color: #9dc6ff;
-  border: 1px solid rgba(47,122,224,.42); white-space: nowrap;
+  background: rgba(77,163,255,.20); color: #b3d9ff;
+  border: 1px solid rgba(77,163,255,.48); white-space: nowrap;
 }
 
 /* ------------------------------------------------------------ alvos */

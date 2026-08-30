@@ -2,10 +2,10 @@
    justamente quando a internet cair. */
 'use strict';
 
-const CORES = { GIGA: '#3987e5', IMPACTO: '#d95926', ROTEADOR: '#8a6fe0' };
+const CORES = { GIGA: '#4da3ff', IMPACTO: '#ff7a45', ROTEADOR: '#a98bff' };
 /* Um link novo (outra operadora, outra placa) não pode sair sem cor: a paleta
    entra pela ordem em que o back-end devolve os links. */
-const PALETA = ['#3987e5', '#d95926', '#8a6fe0', '#2fa37a', '#c9a227'];
+const PALETA = ['#4da3ff', '#ff7a45', '#a98bff', '#2ecc71', '#e0b52e'];
 const corLink = (nome) =>
   CORES[nome] || PALETA[Math.max(0, nomesLinks().indexOf(nome)) % PALETA.length];
 
@@ -22,7 +22,7 @@ function linksDeInternet() {
   return n.length ? n : ['GIGA', 'IMPACTO'];
 }
 const ehLan = (nome) => estado.links.some((l) => l.name === nome && l.kind === 'lan');
-const STATUS = { good: '#0ca30c', warning: '#fab219', critical: '#d03b3b', sem: '#3a3a38' };
+const STATUS = { good: '#2ecc71', warning: '#ffc531', critical: '#ff5a5a', sem: '#33415c' };
 const ROTULO_ESTADO = { UP: 'NO AR', DEGRADED: 'DEGRADADO', DOWN: 'FORA DO AR', NO_LINK: 'SEM LINK' };
 const CAUSA = {
   provedor: 'provável queda do provedor',
@@ -166,7 +166,7 @@ function renderMesh(d) {
     btn.disabled = true;
     btn.textContent = '—';
     msg.textContent = d.erro || 'o comando nordvpn não existe neste aparelho';
-    msg.style.color = '#f5c451';
+    msg.style.color = '#ffd76a';
     info.innerHTML = '';
     tb.innerHTML = '';
     return;
@@ -185,7 +185,7 @@ function renderMesh(d) {
   btn.className = 'btn' + (d.meshnet ? '' : ' btn-primario');
   btn.dataset.alvo = d.meshnet ? 'off' : 'on';
 
-  if (d.erro) { msg.textContent = '⚠️ ' + d.erro; msg.style.color = '#f5c451'; }
+  if (d.erro) { msg.textContent = '⚠️ ' + d.erro; msg.style.color = '#ffd76a'; }
   else if (!msg.dataset.fixo) { msg.textContent = ''; msg.style.color = ''; }
 
   const item = (rot, valor, obs) => `<div class="alvo">
@@ -249,10 +249,10 @@ async function alternarMesh() {
     const j = await r.json();
     if (!r.ok) throw new Error(j.erro || 'erro');
     msg.textContent = '✅ ' + j.mensagem;
-    msg.style.color = '#7ee07e';
+    msg.style.color = '#8ef0b6';
   } catch (e) {
     msg.textContent = '❌ ' + e.message;
-    msg.style.color = '#ff9b9b';
+    msg.style.color = '#ffb3b3';
   } finally {
     delete msg.dataset.fixo;
     // o daemon leva alguns segundos para refletir a mudança
@@ -357,13 +357,13 @@ function renderTrace(d) {
   const alvo = `${escTxt(d.destino)}${d.destino_ip && d.destino_ip !== d.destino ? ' (' + escTxt(d.destino_ip) + ')' : ''}`;
   if (d.fase === 'erro') {
     msg.textContent = `❌ ${d.link}: ${d.erro}`;
-    msg.style.color = '#ff9b9b';
+    msg.style.color = '#ffb3b3';
   } else if (d.fase === 'fim') {
     msg.textContent = (d.chegou ? '✅ ' : '⚠️ ')
       + `${d.link} → ${alvo} · ${saltos.length} saltos`
       + (d.duracao_s != null ? ` · ${d.duracao_s}s` : '')
       + (d.chegou ? '' : ` · ${d.erro || 'o destino não respondeu'}`);
-    msg.style.color = d.chegou ? '#7ee07e' : '#f5c451';
+    msg.style.color = d.chegou ? '#8ef0b6' : '#ffd76a';
   } else {
     msg.textContent = `traçando ${d.link} → ${alvo}… salto ${saltos.length}`;
     msg.style.color = '';
@@ -393,7 +393,7 @@ async function rodarTrace() {
   const destino = $('tr-destino').value.trim();
   const max_hops = Number($('tr-hops').value);
   const msg = $('tr-msg');
-  if (!destino) { msg.textContent = 'informe um destino'; msg.style.color = '#f5c451'; return; }
+  if (!destino) { msg.textContent = 'informe um destino'; msg.style.color = '#ffd76a'; return; }
   msg.textContent = 'iniciando…';
   msg.style.color = '';
   document.querySelector('#tab-trace tbody').innerHTML = '';
@@ -406,7 +406,7 @@ async function rodarTrace() {
     if (!r.ok) throw new Error(j.erro || 'erro');
   } catch (e) {
     msg.textContent = '❌ ' + e.message;
-    msg.style.color = '#ff9b9b';
+    msg.style.color = '#ffb3b3';
   }
 }
 
@@ -534,7 +534,7 @@ function faixaSemDados(svg, series, X, M, ih, t0, t1, comTexto) {
   if (comTexto && largura > 150) {
     const tx = svgEl('text', {
       x: X(t0) + largura / 2, y: M.t + ih / 2, 'text-anchor': 'middle',
-      fill: '#898781', 'font-size': 12,
+      fill: '#93a3c0', 'font-size': 12,
     });
     tx.textContent = 'sem monitoramento neste trecho';
     svg.appendChild(tx);
@@ -572,12 +572,12 @@ function desenharLatencia(series, eventos, t0, t1) {
 
   // grade + eixo Y
   ticksY(ymax).forEach((v) => {
-    svg.appendChild(svgEl('line', { x1: M.l, x2: W - M.r, y1: Y(v), y2: Y(v), stroke: v === 0 ? '#383835' : '#2c2c2a', 'stroke-width': 1 }));
-    const tx = svgEl('text', { x: M.l - 8, y: Y(v) + 4, 'text-anchor': 'end', fill: '#898781', 'font-size': 11 });
+    svg.appendChild(svgEl('line', { x1: M.l, x2: W - M.r, y1: Y(v), y2: Y(v), stroke: v === 0 ? '#3b4d70' : '#26334a', 'stroke-width': 1 }));
+    const tx = svgEl('text', { x: M.l - 8, y: Y(v) + 4, 'text-anchor': 'end', fill: '#93a3c0', 'font-size': 11 });
     tx.textContent = nf(v, v < 10 ? 1 : 0);
     svg.appendChild(tx);
   });
-  const un = svgEl('text', { x: M.l - 8, y: M.t - 2, 'text-anchor': 'end', fill: '#898781', 'font-size': 10 });
+  const un = svgEl('text', { x: M.l - 8, y: M.t - 2, 'text-anchor': 'end', fill: '#93a3c0', 'font-size': 10 });
   un.textContent = 'ms';
   svg.appendChild(un);
 
@@ -585,7 +585,7 @@ function desenharLatencia(series, eventos, t0, t1) {
   const nX = Math.max(2, Math.min(7, Math.floor(iw / 120)));
   for (let i = 0; i <= nX; i++) {
     const t = t0 + ((t1 - t0) * i) / nX;
-    const tx = svgEl('text', { x: X(t), y: H - 8, 'text-anchor': i === 0 ? 'start' : i === nX ? 'end' : 'middle', fill: '#898781', 'font-size': 11 });
+    const tx = svgEl('text', { x: X(t), y: H - 8, 'text-anchor': i === 0 ? 'start' : i === nX ? 'end' : 'middle', fill: '#93a3c0', 'font-size': 11 });
     tx.textContent = rotuloTempo(t, t1 - t0);
     svg.appendChild(tx);
   }
@@ -632,7 +632,7 @@ const PERDA_FAIXAS = [
   { lim: 50,  cls: 'p3', rot: '10 a 50%' },
   { lim: 101, cls: 'p4', rot: 'acima de 50%' },
 ];
-const PERDA_COR = { p0: '#2f6f3f', p1: '#c9a227', p2: '#e07b39', p3: '#d64545', p4: '#8f1f1f', sem: '#3a3a37' };
+const PERDA_COR = { p0: '#2f8f5b', p1: '#e0b52e', p2: '#ff8f43', p3: '#ff5a5a', p4: '#b81f3a', sem: '#33415c' };
 
 function classePerda(v) {
   if (v == null) return 'sem';
@@ -692,7 +692,7 @@ function desenharPerda(series, t0, t1) {
 
 /* ------------------------------------------------------------ crosshair */
 function ligarCrosshair(svg, tt, wrap, series, X, M, ih, t0, t1, unidade, campo) {
-  const linha = svgEl('line', { y1: M.t, y2: M.t + ih, stroke: '#c3c2b7', 'stroke-width': 1, 'stroke-dasharray': '3 3', opacity: 0 });
+  const linha = svgEl('line', { y1: M.t, y2: M.t + ih, stroke: '#cbd6ea', 'stroke-width': 1, 'stroke-dasharray': '3 3', opacity: 0 });
   svg.appendChild(linha);
 
   function mover(ev) {
@@ -1100,7 +1100,7 @@ async function testarVelocidade(nome) {
     renderVelocidade();
   } catch (e) {
     msg.textContent = '❌ ' + e.message;
-    msg.style.color = '#ff9b9b';
+    msg.style.color = '#ffb3b3';
   }
 }
 
@@ -1265,10 +1265,10 @@ function conectar() {
       if (d.fase === 'fim') {
         msg.textContent = `✅ ${d.link}: ${nf(d.down_mbps, 1)} Mbps de download · `
           + `${nf(d.up_mbps, 1)} Mbps de upload · ping ${nf(d.ping_ms, 1)} ms`;
-        msg.style.color = '#7ee07e';
+        msg.style.color = '#8ef0b6';
       } else {
         msg.textContent = `❌ ${d.link}: ${d.erro}`;
-        msg.style.color = '#ff9b9b';
+        msg.style.color = '#ffb3b3';
       }
       carregarVelocidade();
       return;
@@ -1379,15 +1379,15 @@ async function salvarIfaces() {
     const j = await r.json();
     if (!r.ok) throw new Error(j.erro || 'erro');
     estado.cfgLinks = j.links || estado.cfgLinks;
-    if (j.aviso) { msg.textContent = '⚠️ ' + j.aviso; msg.style.color = '#f5c451'; }
-    else { msg.textContent = '✅ salvo — a medição já está usando a placa nova'; msg.style.color = '#7ee07e'; }
+    if (j.aviso) { msg.textContent = '⚠️ ' + j.aviso; msg.style.color = '#ffd76a'; }
+    else { msg.textContent = '✅ salvo — a medição já está usando a placa nova'; msg.style.color = '#8ef0b6'; }
     await carregarIfaces();
     // o histórico anterior continua no gráfico; o que muda é de onde vêm as
     // amostras daqui para a frente
     setTimeout(() => { carregarGraficos(); carregarResumo(); }, 2500);
   } catch (e) {
     msg.textContent = '❌ ' + e.message;
-    msg.style.color = '#ff9b9b';
+    msg.style.color = '#ffb3b3';
   }
 }
 
@@ -1442,10 +1442,10 @@ async function salvarConfig() {
     };
     carregarResumo();                 // as cores da tabela seguem os limiares
     msg.textContent = '✅ salvo';
-    msg.style.color = '#7ee07e';
+    msg.style.color = '#8ef0b6';
   } catch (e) {
     msg.textContent = '❌ ' + e.message;
-    msg.style.color = '#ff9b9b';
+    msg.style.color = '#ffb3b3';
   }
   setTimeout(() => { msg.textContent = ''; }, 4000);
 }
@@ -1460,11 +1460,11 @@ async function testarWebhook() {
       body: JSON.stringify({ webhook_url: $('c-webhook').value.trim() }),
     });
     const j = await r.json();
-    if (j.ok) { msg.textContent = `✅ entregue (HTTP ${j.status_code})`; msg.style.color = '#7ee07e'; }
-    else { msg.textContent = `❌ falhou: ${j.erro || j.status_code || j.erro}`; msg.style.color = '#ff9b9b'; }
+    if (j.ok) { msg.textContent = `✅ entregue (HTTP ${j.status_code})`; msg.style.color = '#8ef0b6'; }
+    else { msg.textContent = `❌ falhou: ${j.erro || j.status_code || j.erro}`; msg.style.color = '#ffb3b3'; }
   } catch (e) {
     msg.textContent = '❌ ' + e.message;
-    msg.style.color = '#ff9b9b';
+    msg.style.color = '#ffb3b3';
   }
 }
 
@@ -1507,9 +1507,9 @@ async function baixar(url, padrao, rotulo, botao) {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(href), 10000);
-    msgManut(`✅ ${rotulo} baixado (${(blob.size / 1024).toFixed(0)} KB)`, '#7ee07e');
+    msgManut(`✅ ${rotulo} baixado (${(blob.size / 1024).toFixed(0)} KB)`, '#8ef0b6');
   } catch (e) {
-    msgManut('❌ ' + e.message, '#ff9b9b');
+    msgManut('❌ ' + e.message, '#ffb3b3');
   } finally {
     botao.disabled = false;
     botao.textContent = original;
@@ -1529,14 +1529,14 @@ async function resetar() {
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.erro || 'erro');
-    msgManut('✅ ' + j.mensagem, '#7ee07e');
+    msgManut('✅ ' + j.mensagem, '#8ef0b6');
     $('caixa-confirma').classList.add('oculto');
     $('r-confirma').value = '';
     estado.offset = 0;
     await carregarConfig();
     await Promise.all([carregarGraficos(), carregarResumo(), carregarEventos()]);
   } catch (e) {
-    msgManut('❌ ' + e.message, '#ff9b9b');
+    msgManut('❌ ' + e.message, '#ffb3b3');
   } finally {
     btn.disabled = true;               // volta travado: exige digitar APAGAR de novo
     btn.textContent = original;
