@@ -146,6 +146,121 @@ function renderDnsLan(d) {
     + (linhas.length ? '\n\n' + linhas.join('\n') : '');
 }
 
+/* ---------------------------------------------------------- meshnet */
+// O Meshnet é o caminho de acesso remoto a este aparelho. Por isso o botão de
+// DESLIGAR pede confirmação: a página não tem login, e desligar daqui tranca o
+// dono do lado de fora. Ligar não tem risco, então vai direto.
+const MESH_OS = { linux: '🐧', windows: '🪟', macos: '🍎', ios: '📱', android: '🤖' };
+
+function renderMesh(d) {
+  const pill = $('mesh-pill');
+  const btn = $('mesh-toggle');
+  const msg = $('mesh-msg');
+  const info = $('mesh-info');
+  const tb = document.querySelector('#tab-mesh tbody');
+  if (!pill || !d) return;
+
+  if (d.disponivel === false) {
+    pill.className = 'pill pill-neutro';
+    pill.textContent = 'Meshnet: indisponível';
+    btn.disabled = true;
+    btn.textContent = '—';
+    msg.textContent = d.erro || 'o comando nordvpn não existe neste aparelho';
+    msg.style.color = '#f5c451';
+    info.innerHTML = '';
+    tb.innerHTML = '';
+    return;
+  }
+  if (d.meshnet === null || d.meshnet === undefined) {
+    pill.className = 'pill pill-neutro';
+    pill.textContent = 'Meshnet: lendo…';
+    btn.disabled = true;
+    return;
+  }
+
+  pill.className = 'pill ' + (d.meshnet ? 'pill-on' : 'pill-off');
+  pill.textContent = 'Meshnet: ' + (d.meshnet ? 'ativo' : 'desligado');
+  btn.disabled = false;
+  btn.textContent = d.meshnet ? 'Desligar Meshnet' : 'Ligar Meshnet';
+  btn.className = 'btn' + (d.meshnet ? '' : ' btn-primario');
+  btn.dataset.alvo = d.meshnet ? 'off' : 'on';
+
+  if (d.erro) { msg.textContent = '⚠️ ' + d.erro; msg.style.color = '#f5c451'; }
+  else if (!msg.dataset.fixo) { msg.textContent = ''; msg.style.color = ''; }
+
+  const item = (rot, valor, obs) => `<div class="alvo">
+    <div class="alvo-rot">${rot}</div>
+    <div class="alvo-val">${escTxt(valor)}</div>
+    ${obs ? `<div class="alvo-obs">${escTxt(obs)}</div>` : ''}
+  </div>`;
+
+  const eu = d.este_aparelho || {};
+  const saida = d.saida || {};
+  const conectados = (d.pares_locais || []).filter((p) => p.status === 'connected').length;
+  info.innerHTML = [
+    item('Este aparelho no Meshnet', eu.nickname || eu.hostname || '—', eu.hostname || ''),
+    item('IP do Meshnet', eu.ip || '—', 'é por este endereço que você chega aqui de fora'),
+    item('Saindo por', saida.link || saida.iface || '—',
+         saida.gateway ? `gateway ${saida.gateway} · métrica ${saida.metrica}` : ''),
+    item('VPN (túnel de saída)', d.vpn || '—',
+         'desconectado é o esperado: aqui a NordVPN é só para o Meshnet'),
+    item('Aparelhos conectados', `${conectados} de ${(d.pares_locais || []).length}`,
+         d.versao || ''),
+  ].join('');
+
+  const pares = (d.pares_locais || []).concat(d.pares_externos || []);
+  tb.innerHTML = pares.length ? pares.map((p) => {
+    const on = p.status === 'connected';
+    const nome = p.nickname && p.nickname !== '-' ? p.nickname : (p.hostname || '—');
+    return `<tr>
+      <td>${MESH_OS[p.os] || '💻'} ${escTxt(nome)}</td>
+      <td class="muted">${escTxt(p.ip || '—')}</td>
+      <td class="muted">${escTxt(p.distribuicao || p.os || '—')}</td>
+      <td><span class="bolinha b-${on ? 'UP' : 'DOWN'}"></span>${on ? 'conectado' : 'desconectado'}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="4" class="muted">Nenhum aparelho no Meshnet.</td></tr>';
+}
+
+async function carregarMesh() {
+  try { renderMesh(await pegar('/api/mesh')); } catch (e) { console.error(e); }
+}
+
+async function alternarMesh() {
+  const btn = $('mesh-toggle');
+  const msg = $('mesh-msg');
+  const ligar = btn.dataset.alvo === 'on';
+  const corpo = { meshnet: ligar };
+  if (!ligar) {
+    const ok = confirm(
+      'Desligar o Meshnet corta o acesso remoto a este Orange Pi.\n\n'
+      + 'Você só conseguirá religar estando na rede local. Continuar?');
+    if (!ok) return;
+    corpo.confirmar = 'DESLIGAR';
+  }
+  btn.disabled = true;
+  msg.dataset.fixo = '1';
+  msg.textContent = ligar ? 'ligando…' : 'desligando…';
+  msg.style.color = '';
+  try {
+    const r = await fetch('/api/mesh', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(corpo),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.erro || 'erro');
+    msg.textContent = '✅ ' + j.mensagem;
+    msg.style.color = '#7ee07e';
+  } catch (e) {
+    msg.textContent = '❌ ' + e.message;
+    msg.style.color = '#ff9b9b';
+  } finally {
+    delete msg.dataset.fixo;
+    // o daemon leva alguns segundos para refletir a mudança
+    setTimeout(carregarMesh, 2500);
+    setTimeout(carregarMesh, 8000);
+  }
+}
+
 /* ------------------------------------------------------------ alvos */
 // Pedido explícito: mostrar na página o alvo do ping e o IP do servidor DNS.
 // O resumo fica no próprio summary, para os dois números aparecerem sem precisar
@@ -1530,6 +1645,7 @@ function ligarEventos() {
   });
   $('btn-reset-ok').addEventListener('click', resetar);
 
+  $('mesh-toggle').addEventListener('click', alternarMesh);
   $('tr-rodar').addEventListener('click', rodarTrace);
   $('tr-destino').addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter') rodarTrace();
@@ -1596,12 +1712,13 @@ async function iniciar() {
       (s.port_fallback ? ' (porta 666 indisponível — veja o README)' : '');
   } catch (e) { console.error(e); }
   await Promise.all([carregarGraficos(), carregarResumo(), carregarEventos(),
-                     carregarVelocidade(), carregarTrace(), carregarAlvos()]);
+                     carregarVelocidade(), carregarTrace(), carregarAlvos(), carregarMesh()]);
   conectar();
   if ($('config').open) carregarIfaces();
   setInterval(relogio, 1000);
   setInterval(carregarEventos, 60000);
   setInterval(carregarAlvos, 60000);
+  setInterval(carregarMesh, 60000);
   agendarAtualizacoes();
 }
 

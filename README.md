@@ -90,6 +90,7 @@ relatórios que vão para a operadora.
 | 🧭 **Vigia o DNS da LAN** | este aparelho é o servidor DNS da rede: uma sonda separada, pela rota normal, avisa quando ninguém consegue navegar apesar dos links no ar |
 | 🚀 **Testa a velocidade de cada link** | download e upload reais, um botão por internet — e uma medição automática por dia, de madrugada |
 | 🗺️ **Traça o caminho por cada internet** | traceroute próprio, sem root e sem o binário, com a bandeira do país de cada salto |
+| 🔗 **Mostra o Meshnet** | o acesso remoto a este aparelho, com quem está conectado e por qual operadora o túnel está saindo |
 | 📈 **Guarda 5 anos de histórico** | amostras de 2 s por 48 h, minuto por 90 dias, hora por 5 anos — e estabiliza abaixo de 70 MB |
 | 📄 **Gera o PDF da prova** | um botão por internet: hora exata de cada queda, duração e causa, para mandar à operadora. Escrito à mão em Python puro — não há reportlab nem navegador headless neste aparelho |
 | 🔔 **Avisa no Discord/Slack** | webhook traduzido conforme o destino, e enviado **pelo outro link** se o principal estiver caído |
@@ -203,6 +204,30 @@ IMPACTO → 1.1.1.1    ... 10.100.9.14 → 10.100.10.1 → 172.17.16.161 → 172
 Cada salto público mostra a **bandeira do país** — é o que revela o tráfego
 saindo do Brasil cedo demais. O país é consultado uma vez por IP e guardado para
 sempre: os saltos se repetem a cada traçado.
+
+## NordVPN · Meshnet
+
+Aqui a NordVPN **não serve para trocar de IP**. Serve para alcançar este Orange
+Pi de fora, pelo Meshnet — e é por isso que o painel mostra o Meshnet, e não
+"conectar a um servidor VPN". O que interessa é se o acesso remoto está de pé.
+
+A seção mostra o estado, o apelido e o **IP do Meshnet** deste aparelho (é por
+ele que você chega aqui de fora), a lista de aparelhos pareados com quem está
+conectado, e **por qual operadora o túnel está saindo agora**. Esse último é o
+detalhe que justifica a seção existir: o túnel sobe pela rota padrão, então se a
+operadora principal cair ele volta sozinho pela reserva — e dá para ver isso
+acontecendo.
+
+O botão liga e desliga o Meshnet. O CLI `nordvpn` responde sem `sudo` porque o
+usuário está no grupo `nordvpn`, o que torna o botão possível — e também
+perigoso: **esta página não tem login**. Desligar o Meshnet corta o próprio
+caminho de acesso remoto ao aparelho, e só dá para religar estando na rede
+local. Por isso desligar exige confirmação na página e `{"confirmar":"DESLIGAR"}`
+na API; ligar, que não tem risco, vai direto.
+
+Cada chamada ao `nordvpn` conversa com um daemon e custa segundos, então o
+estado é lido por uma thread em segundo plano e servido de um cache — abrir a
+página não espera pelo daemon.
 
 ## Teste de velocidade
 
@@ -343,6 +368,8 @@ roteamento continua exatamente como estava.
 | `GET /api/traceroute?link=` | último traçado de cada link, e o que está rodando |
 | `POST /api/traceroute` | traça o caminho saindo por um link: `{"link":"GIGA","destino":"1.1.1.1"}` |
 | `GET /api/alvos` | para onde cada sonda aponta e o estado de cada servidor DNS da LAN |
+| `GET /api/mesh` | estado do Meshnet, pares, e por qual link o túnel está saindo |
+| `POST /api/mesh` | liga/desliga: `{"meshnet":true}` — desligar exige `{"confirmar":"DESLIGAR"}` |
 | `GET /api/config` · `POST /api/config` | limiares, webhook, som, teste de velocidade automático |
 | `GET /api/links` | links, a placa de cada um e todas as placas do sistema |
 | `POST /api/links` | troca a placa (e o alvo do link LAN) ao vivo: `{"links":{"GIGA":{"iface":"eth0"}}}` |
@@ -378,6 +405,7 @@ speedtest.py  teste de download/upload preso à interface
 alerts.py     regras de alerta, webhook, barramento SSE
 server.py     API HTTP, SSE, estáticos
 trace.py      traceroute próprio, sem root e sem o binário `traceroute`
+mesh.py       estado e liga/desliga do NordVPN Meshnet
 pdf.py        escritor de PDF 1.4 feito à mão
 report.py     montagem do relatório
 run.sh              lock de instância única + watchdog

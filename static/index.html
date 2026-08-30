@@ -225,6 +225,33 @@
   </div>
 </section>
 
+<!-- ------------------------------------------------ meshnet -->
+<section class="painel">
+  <div class="painel-topo">
+    <div>
+      <h2>NordVPN · Meshnet</h2>
+      <p class="painel-sub">A NordVPN aqui não serve para trocar de IP — serve para
+        alcançar este Orange Pi de fora, pelo Meshnet. O túnel sobe pela rota padrão,
+        então <b>se uma operadora cair ele volta sozinho pela outra</b>.</p>
+    </div>
+    <div class="filtros">
+      <span class="pill pill-neutro" id="mesh-pill">Meshnet: —</span>
+      <button class="btn" id="mesh-toggle" type="button" disabled>—</button>
+    </div>
+  </div>
+  <p id="mesh-msg" class="muted">—</p>
+  <div class="alvos-grid" id="mesh-info"></div>
+  <div class="tabela-wrap">
+    <table class="tabela" id="tab-mesh">
+      <thead><tr>
+        <th scope="col">Aparelho</th><th scope="col">IP do Meshnet</th>
+        <th scope="col">Sistema</th><th scope="col">Estado</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
 <!-- ------------------------------------------------ eventos -->
 <section class="painel">
   <details id="eventos-det">

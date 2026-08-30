@@ -20,6 +20,7 @@ sys.path.insert(0, BASE_DIR)
 
 import alerts as alerts_mod          # noqa: E402
 import db                            # noqa: E402
+import mesh as mesh_mod              # noqa: E402
 import probe as probe_mod            # noqa: E402
 import server as server_mod          # noqa: E402
 import speedtest as speedtest_mod    # noqa: E402
@@ -224,6 +225,7 @@ def main():
     app = {
         "probes": [], "bus": bus, "alerts": alerts, "stop": stop,
         "started": time.time(), "port": None, "dns_lan": None,
+        "mesh": None,
     }
 
     # Cabo trocado de porta enquanto o servico estava parado: o link continua
@@ -245,6 +247,9 @@ def main():
     dns_lan = probe_mod.SondaDnsLan(app, stop, alerts)
     app["dns_lan"] = dns_lan
 
+    # o CLI do nordvpn custa segundos por chamada: le em segundo plano
+    app["mesh"] = mesh_mod.SondaMesh(stop)
+
     srv = server_mod.build(app)
 
     with open(PID_PATH, "w") as fh:
@@ -263,6 +268,7 @@ def main():
     for p in probes:
         p.start()
     dns_lan.start()
+    app["mesh"].start()
     threading.Thread(target=broadcaster, args=(app,), name="broadcast",
                      daemon=True).start()
     threading.Thread(target=maintenance, args=(app,), name="manutencao",

@@ -369,6 +369,30 @@ def _eh_privado(ip):
             or (a == 192 and b == 168))
 
 
+def rota_default():
+    """A rota padrao vencedora agora: {iface, gateway, metrica}, ou None.
+
+    Quem tem a menor metrica leva. Serve para dizer por qual operadora o
+    trafego que NAO esta preso a uma interface esta saindo -- o tunel do
+    Meshnet, por exemplo.
+    """
+    res = _run(["ip", "-j", "-4", "route", "show", "default"])
+    if not res or res.returncode != 0 or not res.stdout.strip():
+        return None
+    try:
+        rotas = json.loads(res.stdout)
+    except ValueError:
+        return None
+    melhor = None
+    for r in rotas:
+        if not r.get("dev"):
+            continue
+        m = r.get("metric", 0) or 0
+        if melhor is None or m < melhor["metrica"]:
+            melhor = {"iface": r["dev"], "gateway": r.get("gateway"), "metrica": m}
+    return melhor
+
+
 def ips_locais_privados():
     """Todo IPv4 privado deste aparelho, por interface. {ip: iface}.
 

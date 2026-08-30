@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import db
 import speedtest
+import mesh as mesh_mod
 import trace as trace_mod
 
 log = logging.getLogger("netmon.server")
@@ -95,6 +96,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.api_traceroute_get()
             if path == "/api/alvos":
                 return self.api_alvos()
+            if path == "/api/mesh":
+                return self.api_mesh_get()
             if path == "/api/speedtest.csv":
                 return self.api_speedtest_csv()
             if path == "/api/config":
@@ -147,6 +150,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.api_speedtest_post(data)
             if path == "/api/traceroute":
                 return self.api_traceroute_post(data)
+            if path == "/api/mesh":
+                return self.api_mesh_post(data)
             if path == "/api/webhook/test":
                 url = data.get("webhook_url") or db.get_config().get("webhook_url")
                 if not url:
@@ -384,6 +389,49 @@ class Handler(BaseHTTPRequestHandler):
             return self._err(409, str(exc))
         self._json({"ok": True, "link": name, "dur": dur,
                     "mensagem": "teste iniciado; acompanhe pelo /api/stream"}, 202)
+
+    # -- NordVPN / Meshnet -------------------------------------------------
+    def _saida_atual(self):
+        """Por qual link o Meshnet esta saindo agora.
+
+        O tunel do Meshnet sobe pela rota padrao, entao quem manda e a rota
+        default de menor metrica. E o que faz o Meshnet sobreviver a queda de
+        uma operadora: a rota vira para a outra e o tunel sobe de novo por la.
+        """
+        import probe
+        try:
+            padrao = probe.rota_default()
+        except Exception:
+            return None
+        if not padrao:
+            return None
+        for p in self.app["probes"]:
+            if p.iface == padrao.get("iface"):
+                return dict(padrao, link=p.name_link)
+        return dict(padrao, link=None)
+
+    def api_mesh_get(self):
+        vigia = self.app.get("mesh")
+        estado = vigia.snapshot() if vigia else {"disponivel": None}
+        self._json(dict(estado, saida=self._saida_atual()))
+
+    def api_mesh_post(self, data):
+        if "meshnet" not in data:
+            return self._err(400, 'informe {"meshnet": true} ou {"meshnet": false}')
+        ligar = str(data.get("meshnet")).lower() in ("1", "true", "on", "yes")
+        # Desligar corta o acesso remoto a este aparelho, e esta pagina nao tem
+        # login: quem estiver na LAN poderia trancar o dono do lado de fora sem
+        # querer. Ligar nao tem risco nenhum, entao so o desligar confirma.
+        if not ligar and data.get("confirmar") != "DESLIGAR":
+            return self._err(400, "desligar o Meshnet corta o acesso remoto a este "
+                                  'aparelho; envie {"confirmar":"DESLIGAR"}')
+        ok, msg = mesh_mod.definir_meshnet(ligar)
+        vigia = self.app.get("mesh")
+        if vigia:
+            vigia.atualizar_agora()
+        if not ok:
+            return self._err(502, msg)
+        self._json({"ok": True, "meshnet": ligar, "mensagem": msg}, 202)
 
     # -- alvos das sondas --------------------------------------------------
     def api_alvos(self):
