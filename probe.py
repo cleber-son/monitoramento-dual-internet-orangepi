@@ -38,9 +38,16 @@ DEG_CLEAR_CYCLES = 10      # ~20s para sair de degradado (histerese)
 TROCA_CARENCIA = 60        # s de carencia depois de trocar a placa de rede
 EWMA_ALPHA = 0.4           # reage rapido, ja que o ciclo agora e curto
 
-# Alvos escolhidos de proposito fora de 1.1.1.1/8.8.8.8: existem rotas estaticas
-# fixando esses dois IPs em `dev eth0`, o que confundiria a medicao da IMPACTO.
-PING_TARGETS = ["9.9.9.9", "208.67.222.222"]
+# Dois provedores diferentes de proposito: o alvo secundario so entra quando o
+# primario some por completo, e usar o mesmo dono nos dois faria uma queda da
+# Google parecer queda do link.
+#
+# Ate 30/08 o 8.8.8.8 era evitado aqui porque havia rotas estaticas fixando esse
+# IP numa unica interface -- medir a outra operadora por ele daria um numero
+# falso. Essas rotas foram removidas (elas mesmas derrubaram o DNS da casa), e
+# hoje `ip route get 8.8.8.8` sai pela rota default normal. Se um dia voltarem,
+# este alvo volta a mentir: confira com `ip route show | grep 8.8.8.8`.
+PING_TARGETS = ["8.8.8.8", "9.9.9.9"]
 DNS_SERVER = "9.9.9.9"     # nunca 127.0.0.1: mediria o Pi-hole, nao o link
 DNS_NAME = "www.google.com"
 TCP_TARGET = ("9.9.9.9", 443)
