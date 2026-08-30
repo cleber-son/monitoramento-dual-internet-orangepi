@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import db
 import speedtest
+import trace as trace_mod
 
 log = logging.getLogger("netmon.server")
 
@@ -90,6 +91,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.api_summary()
             if path == "/api/speedtest":
                 return self.api_speedtest_get()
+            if path == "/api/traceroute":
+                return self.api_traceroute_get()
+            if path == "/api/alvos":
+                return self.api_alvos()
             if path == "/api/speedtest.csv":
                 return self.api_speedtest_csv()
             if path == "/api/config":
@@ -140,6 +145,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.api_reset(data)
             if path == "/api/speedtest":
                 return self.api_speedtest_post(data)
+            if path == "/api/traceroute":
+                return self.api_traceroute_post(data)
             if path == "/api/webhook/test":
                 url = data.get("webhook_url") or db.get_config().get("webhook_url")
                 if not url:
@@ -172,6 +179,8 @@ class Handler(BaseHTTPRequestHandler):
             "port_fallback": self.app["port"] != PREFERRED_PORT,
             "servidor_uptime_s": now - int(self.app["started"]),
             "links": links,
+            "dns_casa": (self.app["dns_casa"].snapshot()
+                         if self.app.get("dns_casa") else None),
         })
 
     def api_samples(self):
@@ -301,7 +310,8 @@ class Handler(BaseHTTPRequestHandler):
     def api_config_post(self, data):
         permitido = {"webhook_url", "webhook_enabled", "lat_limiar_ms",
                      "loss_limiar_pct", "jitter_limiar_ms", "som_habilitado",
-                     "cooldown_s"}
+                     "cooldown_s", "auto_speed_enabled", "auto_speed_hora",
+                     "auto_speed_dur"}
         pairs = {}
         for k, v in data.items():
             if k not in permitido:
@@ -318,7 +328,24 @@ class Handler(BaseHTTPRequestHandler):
                 if n <= 0:
                     return self._err(400, "%s deve ser maior que zero" % k)
                 v = n
-            if k in ("webhook_enabled", "som_habilitado"):
+            if k == "auto_speed_hora":
+                try:
+                    h, _, m = str(v).partition(":")
+                    h, m = int(h), int(m or 0)
+                    assert 0 <= h <= 23 and 0 <= m <= 59
+                except (ValueError, AssertionError):
+                    return self._err(400, "horario deve estar no formato HH:MM")
+                v = "%02d:%02d" % (h, m)
+            if k == "auto_speed_dur":
+                try:
+                    n = float(v)
+                except (TypeError, ValueError):
+                    return self._err(400, "auto_speed_dur deve ser numerico")
+                if not (speedtest.DUR_MIN <= n <= speedtest.DUR_MAX):
+                    return self._err(400, "duracao deve ficar entre %g e %g s"
+                                     % (speedtest.DUR_MIN, speedtest.DUR_MAX))
+                v = n
+            if k in ("webhook_enabled", "som_habilitado", "auto_speed_enabled"):
                 v = "1" if str(v) in ("1", "true", "True", "on") else "0"
             pairs[k] = v
         if not pairs:
@@ -358,17 +385,90 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"ok": True, "link": name, "dur": dur,
                     "mensagem": "teste iniciado; acompanhe pelo /api/stream"}, 202)
 
+    # -- alvos das sondas --------------------------------------------------
+    def api_alvos(self):
+        """Para onde cada medicao aponta, para a pagina poder mostrar.
+
+        Existe porque "latencia 4 ms" nao quer dizer nada sem saber ate ONDE, e
+        porque o servidor DNS da casa e justamente o que ninguem lembra qual e
+        na hora do problema.
+        """
+        import probe          # tardio, igual ao listar_ifaces: evita ciclo de import
+        vigia = self.app.get("dns_casa")
+        dns_casa = vigia.snapshot() if vigia else {}
+        self._json({
+            "sondas": probe.alvos_das_sondas(),
+            "dns_casa": {
+                "servidores": dns_casa.get("servidores", []),
+                "zona": dns_casa.get("zona"),
+                "intervalo_s": probe.SondaDnsCasa.INTERVALO,
+            },
+            "dns_do_sistema": probe.dns_do_sistema(),
+            "por_link": [{
+                "link": p.name_link,
+                "kind": p.kind,
+                "iface": p.iface,
+                "ip": p.ip,
+                "gateway": p.gateway,
+                "alvo_ping": p.target if p.kind == "lan" else None,
+                "dns_do_dhcp": probe.dns_da_interface(p.iface) if p.iface else [],
+            } for p in self.app["probes"]],
+        })
+
+    # -- traceroute --------------------------------------------------------
+    def api_traceroute_get(self):
+        """Estado atual + o ultimo tracado de cada link.
+
+        A pagina abre ja preenchida com o tracado anterior: comparar o caminho
+        de hoje com o da ultima vez e metade da utilidade.
+        """
+        q = self._query()
+        name = (q.get("link") or "").upper()
+        if name:
+            return self._json({"rodando": trace_mod.em_andamento(),
+                               "ultimo": trace_mod.ultimo(name)})
+        self._json({
+            "rodando": trace_mod.em_andamento(),
+            "ultimos": {p.name_link: trace_mod.ultimo(p.name_link)
+                        for p in self.app["probes"] if p.kind == "internet"},
+            "max_hops_padrao": trace_mod.MAX_HOPS_PADRAO,
+            "max_hops_teto": trace_mod.MAX_HOPS_TETO,
+        })
+
+    def api_traceroute_post(self, data):
+        name = str(data.get("link") or "").upper()
+        # so links de internet: o traceroute existe para comparar o caminho das
+        # duas operadoras, e ate o roteador de casa ele teria um salto so
+        aceitos = [p.name_link for p in self.app["probes"] if p.kind == "internet"]
+        if name not in aceitos:
+            return self._err(400, "informe link=%s" % " ou link=".join(aceitos))
+        try:
+            destino = trace_mod.validar_destino(data.get("destino"))
+        except ValueError as exc:
+            return self._err(400, str(exc))
+        try:
+            max_hops = int(data.get("max_hops") or trace_mod.MAX_HOPS_PADRAO)
+            consultas = int(data.get("consultas") or trace_mod.CONSULTAS)
+        except (TypeError, ValueError):
+            return self._err(400, "max_hops e consultas devem ser numericos")
+        try:
+            trace_mod.iniciar(self.app, name, destino, max_hops, consultas)
+        except RuntimeError as exc:
+            return self._err(409, str(exc))
+        self._json({"ok": True, "link": name, "destino": destino,
+                    "mensagem": "traceroute iniciado; acompanhe pelo /api/stream"}, 202)
+
     # -- log dos testes de velocidade -------------------------------------
     def api_speedtest_csv(self):
         """O historico inteiro em CSV, para abrir no LibreOffice/Excel."""
         q = self._query()
         link_id = db.link_ids().get((q.get("link") or "").upper())
-        linhas = ["quando;link;download_mbps;upload_mbps;ping_ms;jitter_ms;"
+        linhas = ["quando;link;origem;download_mbps;upload_mbps;ping_ms;jitter_ms;"
                   "bytes_baixados;bytes_enviados;seg_download;seg_upload;servidor;erro"]
         import alerts as _al
         for t in db.list_speedtests(link_id, 5000):
             linhas.append(";".join(str(x) for x in [
-                _al.fmt_iso(t["ts"]), t["link"],
+                _al.fmt_iso(t["ts"]), t["link"], t["origem"] or "manual",
                 _num(t["down_mbps"]), _num(t["up_mbps"]),
                 _num(t["ping_ms"]), _num(t["jitter_ms"]),
                 t["bytes_down"] or "", t["bytes_up"] or "",

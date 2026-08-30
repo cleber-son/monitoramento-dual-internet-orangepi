@@ -48,6 +48,7 @@ const estado = {
   // limiares vindos de /api/config: as cores das estatísticas seguem eles
   limiares: { lat: 80, loss: 20, jit: 60 },
   vel: { ultimos: {}, historico: {}, rodando: null, log: [] },
+  trace: {},
   ifaces: [],
   cfgLinks: [],
   timers: {},
@@ -113,6 +114,187 @@ function medir(svg, wPadrao, hPadrao) {
            H: Math.round(r.height) || svg.clientHeight || hPadrao };
 }
 
+/* ------------------------------------------- DNS da casa (o Pi-hole) */
+// Fica no topo, junto do estado da conexão, e não dentro de um card de link:
+// não é métrica de link nenhum. Em 30/08 os três links apareciam verdes com a
+// casa inteira sem resolver nome, porque o que quebrou foi a rota até os
+// upstreams do Pi-hole — caminho que nenhuma sonda de link percorre.
+function renderDnsCasa(d) {
+  const el = $('dns-casa');
+  if (!el) return;
+  const lista = (d && d.servidores) || [];
+  if (!d || d.ok === null || d.ok === undefined) {
+    el.className = 'pill pill-neutro';
+    el.textContent = lista.length ? 'DNS da casa: medindo…' : 'DNS da casa: —';
+  } else if (d.ok) {
+    el.className = 'pill pill-on';
+    el.textContent = `DNS da casa: ok${d.ms != null ? ' · ' + nf(d.ms, 0) + ' ms' : ''}`;
+  } else {
+    el.className = 'pill pill-off';
+    // nomeia QUAL endereço caiu: o aparelho serve DNS em vários, e saber em
+    // qual parou é o que diz quem da casa ficou sem navegar
+    el.textContent = `DNS da casa: SEM RESOLVER em ${(d.falhando || []).join(', ')}`;
+  }
+  const linhas = lista.map((s) => {
+    const est = s.ok === false ? '✖ ' + (s.erro || 'sem resposta')
+      : s.ok ? '✔ ' + (s.ms != null ? nf(s.ms, 0) + ' ms' : 'ok')
+      : '… medindo';
+    return `${s.servidor} — ${s.papel}: ${est}`;
+  });
+  el.title = 'Resolvedores que este aparelho serve, medidos pela rota normal com '
+    + 'um nome aleatório (o cache não mascara a falha).'
+    + (linhas.length ? '\n\n' + linhas.join('\n') : '');
+}
+
+/* ------------------------------------------------------------ alvos */
+// Pedido explícito: mostrar na página o alvo do ping e o IP do servidor DNS.
+// O resumo fica no próprio summary, para os dois números aparecerem sem precisar
+// abrir a seção.
+function renderAlvos(d) {
+  const grid = $('alvos-grid');
+  const resumo = $('alvos-resumo');
+  if (!grid || !d) return;
+  const s = d.sondas || {};
+  const casa = (d.dns_casa && d.dns_casa.servidores) || [];
+  const principal = casa.find((x) => /DHCP/i.test(x.papel || '')) || casa[0];
+
+  if (resumo) {
+    resumo.textContent = `ping ${(s.ping || [])[0] || '—'} · DNS da casa ${principal ? principal.servidor : '—'}`;
+  }
+
+  const item = (rot, valor, obs) => `<div class="alvo">
+    <div class="alvo-rot">${rot}</div>
+    <div class="alvo-val">${escTxt(valor)}</div>
+    ${obs ? `<div class="alvo-obs">${escTxt(obs)}</div>` : ''}
+  </div>`;
+
+  const linhas = [
+    item('Alvo do ping', (s.ping || []).join('  ·  ') || '—',
+         `a cada ${s.ping_intervalo_s}s, preso à placa de cada link`),
+    item('DNS medido por link', s.dns_servidor || '—',
+         `resolve ${s.dns_nome} a cada ${s.dns_a_cada_s}s — resolvedor público, nunca o Pi-hole: aqui se mede o LINK`),
+    item('Porta TCP', s.tcp || '—', `a cada ${s.tcp_a_cada_s}s`),
+    item('Página de teste', s.http || '—', `a cada ${s.http_a_cada_s}s`),
+    item('IP externo', s.ip_externo || '—', `a cada ${s.ip_externo_a_cada_s}s`),
+  ];
+
+  const linhasDns = casa.map((x) => item(
+    `DNS da casa · ${x.servidor}`,
+    x.ok === false ? 'SEM RESOLVER' : x.ok ? `ok · ${nf(x.ms, 0)} ms` : 'medindo…',
+    x.papel));
+
+  grid.innerHTML = linhas.join('') + linhasDns.join('')
+    + item('Nome consultado no teste do DNS da casa',
+           '(aleatório).' + (d.dns_casa ? d.dns_casa.zona : ''),
+           'muda a cada consulta de propósito: um nome fixo viria do cache e esconderia a falha');
+}
+
+async function carregarAlvos() {
+  try { renderAlvos(await pegar('/api/alvos')); } catch (e) { console.error(e); }
+}
+
+/* ------------------------------------------------------- traceroute */
+// O valor do traceroute aqui é a comparação: o mesmo destino traçado pelas duas
+// operadoras. Por isso o seletor "sair por" é o primeiro campo, e o resultado
+// anterior de cada link fica guardado no servidor — ao trocar o link, a tabela
+// mostra na hora o traçado passado daquele caminho.
+function escTxt(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function renderTrace(d) {
+  const tb = document.querySelector('#tab-trace tbody');
+  const msg = $('tr-msg');
+  if (!tb) return;
+  if (!d) {
+    tb.innerHTML = '<tr><td colspan="7" class="muted">Nenhum traçado ainda — escolha o link e clique em Traçar.</td></tr>';
+    msg.textContent = '—';
+    msg.style.color = '';
+    return;
+  }
+  const saltos = d.saltos || [];
+  tb.innerHTML = saltos.length ? saltos.map((s) => {
+    const ms = (s.ms || []).filter((x) => x != null);
+    const nulo = '<span class="muted">*</span>';
+    // salto que não responde é rotina: muito roteador de trânsito não gera ICMP
+    // por política. Some do caminho, não quer dizer perda.
+    const melhor = ms.length ? nf(Math.min(...ms), 1) : null;
+    const pior = ms.length ? nf(Math.max(...ms), 1) : null;
+    const media = ms.length ? nf(ms.reduce((x, y) => x + y, 0) / ms.length, 1) : null;
+    const extra = s.outros_ips && s.outros_ips.length
+      ? ` <small class="muted" title="o mesmo salto respondeu de mais de um endereço: o roteador tem caminhos paralelos">+${s.outros_ips.length}</small>` : '';
+    // sem bandeira quando o salto é de rede privada — não tem país nenhum
+    const pais = s.bandeira
+      ? `<span class="tr-bandeira" title="${escTxt(s.pais || s.cc)}">${s.bandeira}</span><span class="muted">${escTxt(s.cc)}</span>`
+      : (s.ip ? '<span class="muted" title="rede privada ou país desconhecido">—</span>' : '');
+    return `<tr>
+      <td>${s.n}</td>
+      <td>${s.ip ? escTxt(s.ip) + extra : nulo}</td>
+      <td class="muted">${s.host ? escTxt(s.host) : (s.aviso ? escTxt(s.aviso) : '—')}</td>
+      <td class="tr-pais">${pais}</td>
+      <td>${melhor == null ? nulo : melhor + ' ms'}</td>
+      <td>${media == null ? nulo : media + ' ms'}</td>
+      <td>${pior == null ? nulo : pior + ' ms'}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="7" class="muted">traçando…</td></tr>';
+
+  const alvo = `${escTxt(d.destino)}${d.destino_ip && d.destino_ip !== d.destino ? ' (' + escTxt(d.destino_ip) + ')' : ''}`;
+  if (d.fase === 'erro') {
+    msg.textContent = `❌ ${d.link}: ${d.erro}`;
+    msg.style.color = '#ff9b9b';
+  } else if (d.fase === 'fim') {
+    msg.textContent = (d.chegou ? '✅ ' : '⚠️ ')
+      + `${d.link} → ${alvo} · ${saltos.length} saltos`
+      + (d.duracao_s != null ? ` · ${d.duracao_s}s` : '')
+      + (d.chegou ? '' : ` · ${d.erro || 'o destino não respondeu'}`);
+    msg.style.color = d.chegou ? '#7ee07e' : '#f5c451';
+  } else {
+    msg.textContent = `traçando ${d.link} → ${alvo}… salto ${saltos.length}`;
+    msg.style.color = '';
+  }
+}
+
+async function carregarTrace() {
+  try {
+    const d = await pegar('/api/traceroute');
+    estado.trace = d.ultimos || {};
+    const sel = $('tr-link');
+    if (sel && !sel.options.length) {
+      // só saída pela internet: traçar até o próprio roteador seria um salto só
+      nomesLinks().filter((n) => !ehLan(n)).forEach((n) => {
+        const o = document.createElement('option');
+        o.value = n; o.textContent = n;
+        sel.appendChild(o);
+      });
+    }
+    if (d.rodando) renderTrace(d.rodando);
+    else renderTrace(estado.trace[sel && sel.value] || null);
+  } catch (e) { console.error(e); }
+}
+
+async function rodarTrace() {
+  const link = $('tr-link').value;
+  const destino = $('tr-destino').value.trim();
+  const max_hops = Number($('tr-hops').value);
+  const msg = $('tr-msg');
+  if (!destino) { msg.textContent = 'informe um destino'; msg.style.color = '#f5c451'; return; }
+  msg.textContent = 'iniciando…';
+  msg.style.color = '';
+  document.querySelector('#tab-trace tbody').innerHTML = '';
+  try {
+    const r = await fetch('/api/traceroute', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ link, destino, max_hops }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.erro || 'erro');
+  } catch (e) {
+    msg.textContent = '❌ ' + e.message;
+    msg.style.color = '#ff9b9b';
+  }
+}
+
 /* ------------------------------------------------------------ cards */
 function renderCards(links) {
   const box = $('cards');
@@ -155,7 +337,7 @@ function renderCards(links) {
         <span>IP local <b>${l.ip || '—'}</b></span>
         ${l.kind === 'lan' ? ''
           : `<span class="ip-externo" title="${l.ip_externo_ts ? 'visto em ' + fmtDataHora(l.ip_externo_ts) : 'ainda não consultado'}">IP externo <b>${l.ip_externo || '—'}</b></span>`}
-        <span>placa <b>${l.iface || '—'}</b></span>
+        ${l.kind === 'lan' ? `<span>placa <b>${l.iface || '—'}</b></span>` : ''}
         ${l.kind === 'lan' ? '' : `<span>gw <b>${l.gw_ok ? 'ok' : 'sem resposta'}</b></span>`}
         ${l.dns_ms > 0 ? `<span>DNS <b>${nf(l.dns_ms, 1)} ms</b></span>` : ''}
         <span>uptime 7d <b>${up.d7 == null ? '—' : nf(up.d7, 2) + '%'}</b></span>
@@ -323,50 +505,74 @@ function desenharLatencia(series, eventos, t0, t1) {
 }
 
 /* ------------------------------------------------------------ perda */
+// Perda não é uma grandeza contínua como latência: fica em zero quase o tempo
+// todo e o que interessa é QUANDO e QUÃO GRAVE foi o episódio. Num gráfico de
+// linha isso vira um traço rente ao eixo, invisível justamente no dia em que
+// importa. A faixa por link resolve: cada bloco é um intervalo, a cor diz a
+// gravidade, e um episódio de 2 minutos em 24 h continua sendo um bloco visível.
+const PERDA_FAIXAS = [
+  { lim: 0,   cls: 'p0', rot: 'sem perda' },
+  { lim: 2,   cls: 'p1', rot: 'até 2%' },
+  { lim: 10,  cls: 'p2', rot: '2 a 10%' },
+  { lim: 50,  cls: 'p3', rot: '10 a 50%' },
+  { lim: 101, cls: 'p4', rot: 'acima de 50%' },
+];
+const PERDA_COR = { p0: '#2f6f3f', p1: '#c9a227', p2: '#e07b39', p3: '#d64545', p4: '#8f1f1f', sem: '#3a3a37' };
+
+function classePerda(v) {
+  if (v == null) return 'sem';
+  if (v <= 0) return 'p0';
+  for (const f of PERDA_FAIXAS) if (v <= f.lim) return f.cls;
+  return 'p4';
+}
+
+// Quantos blocos cabem: um por pixel seria ilegível e pesado no Orange Pi.
+function nBlocos(largura) {
+  return Math.max(24, Math.min(180, Math.floor(largura / 7)));
+}
+
 function desenharPerda(series, t0, t1) {
-  const svg = $('g-perda');
-  const { W, H } = medir(svg, 900, 150);
-  const M = { t: 10, r: 14, b: 24, l: W < 420 ? 36 : 48 };
-  limpar(svg);
-  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-  const iw = W - M.l - M.r, ih = H - M.t - M.b;
-  const X = (t) => M.l + ((t - t0) / Math.max(1, t1 - t0)) * iw;
-  const Y = (v) => M.t + ih - (v / 100) * ih;
-
-  faixaSemDados(svg, series, X, M, ih, t0, t1, false);
-
-  [0, 50, 100].forEach((v) => {
-    svg.appendChild(svgEl('line', { x1: M.l, x2: W - M.r, y1: Y(v), y2: Y(v), stroke: v === 0 ? '#383835' : '#2c2c2a', 'stroke-width': 1 }));
-    const tx = svgEl('text', { x: M.l - 8, y: Y(v) + 4, 'text-anchor': 'end', fill: '#898781', 'font-size': 11 });
-    tx.textContent = v + '%';
-    svg.appendChild(tx);
-  });
-
+  const box = $('perda-faixas');
+  if (!box) return;
   const nomes = Object.keys(series);
-  const total = Math.max(1, Math.max(...nomes.map((n) => series[n].length)));
-  // as barras dos links dividem a fatia do instante, com 1px de folga entre elas
-  const lg = Math.max(1.2, ((iw / total) * 0.86) / nomes.length);
-  const grupo = nomes.length * (lg + 1);
-  nomes.forEach((nome, idx) => {
-    const cor = corLink(nome);
-    series[nome].forEach((p) => {
-      const perda = p[4];
-      if (!perda) return;
-      const alt = Math.max(1.5, (perda / 100) * ih);
-      const x = X(p[0]) - grupo / 2 + idx * (lg + 1);
-      svg.appendChild(svgEl('rect', { x, y: M.t + ih - alt, width: lg, height: alt, fill: cor, rx: Math.min(2, lg / 2), opacity: .92 }));
+  const largura = box.clientWidth || 700;
+  const N = nBlocos(largura);
+  const passo = Math.max(1, (t1 - t0) / N);
+
+  box.innerHTML = nomes.map((nome) => {
+    // agrupa as amostras em N intervalos e guarda o PIOR de cada um: numa
+    // janela de 30 dias a média esconderia exatamente o pico que se procura
+    const baldes = new Array(N).fill(null);
+    (series[nome] || []).forEach((p) => {
+      const i = Math.min(N - 1, Math.floor((p[0] - t0) / passo));
+      if (i < 0) return;
+      const v = p[4];
+      if (v == null) return;
+      baldes[i] = baldes[i] == null ? v : Math.max(baldes[i], v);
     });
-  });
+    const vistos = baldes.filter((v) => v != null);
+    const pior = vistos.length ? Math.max(...vistos) : null;
+    const comPerda = vistos.filter((v) => v > 0).length;
 
-  const nX = Math.max(2, Math.min(6, Math.floor(iw / 130)));
-  for (let i = 0; i <= nX; i++) {
-    const t = t0 + ((t1 - t0) * i) / nX;
-    const tx = svgEl('text', { x: X(t), y: H - 7, 'text-anchor': i === 0 ? 'start' : i === nX ? 'end' : 'middle', fill: '#898781', 'font-size': 11 });
-    tx.textContent = rotuloTempo(t, t1 - t0);
-    svg.appendChild(tx);
-  }
+    const blocos = baldes.map((v, i) => {
+      const cls = classePerda(v);
+      const ini = t0 + i * passo;
+      const titulo = v == null
+        ? `${fmtDataHora(ini)} — sem monitoramento`
+        : `${fmtDataHora(ini)} — perda ${nf(v, v < 10 ? 1 : 0)}%`;
+      return `<div class="perda-bloco" style="background:${PERDA_COR[cls]}" title="${titulo}"></div>`;
+    }).join('');
 
-  ligarCrosshair(svg, $('tt-perda'), $('wrap-perda'), series, X, M, ih, t0, t1, '%', 4);
+    const resumo = pior == null ? 'sem dados'
+      : pior <= 0 ? 'nenhuma perda'
+      : `pior ${nf(pior, pior < 10 ? 1 : 0)}% · ${comPerda} ${comPerda === 1 ? 'intervalo' : 'intervalos'}`;
+
+    return `<div class="perda-linha">
+      <span class="perda-nome" style="color:${corLink(nome)}">${nome}</span>
+      <div class="perda-barra">${blocos}</div>
+      <span class="perda-resumo">${resumo}</span>
+    </div>`;
+  }).join('') + `<div class="perda-eixo"><span>${rotuloTempo(t0, t1 - t0)}</span><span>${rotuloTempo(t1, t1 - t0)}</span></div>`;
 }
 
 /* ------------------------------------------------------------ crosshair */
@@ -736,7 +942,7 @@ function renderLogVelocidade() {
   const lista = estado.vel.log || [];
   limpar(tb);
   if (!lista.length) {
-    tb.innerHTML = '<tr><td colspan="8" class="muted vazio">Nenhum teste de velocidade registrado ainda.</td></tr>';
+    tb.innerHTML = '<tr><td colspan="9" class="muted vazio">Nenhum teste de velocidade registrado ainda.</td></tr>';
     $('vel-log-info').textContent = '—';
     return;
   }
@@ -750,6 +956,9 @@ function renderLogVelocidade() {
       <td data-rot="Upload">${t.up_mbps == null ? '—' : nf(t.up_mbps, 1) + ' Mbps'}</td>
       <td data-rot="Ping">${t.ping_ms == null ? '—' : nf(t.ping_ms, 1) + ' ms'}</td>
       <td data-rot="Jitter">${t.jitter_ms == null ? '—' : nf(t.jitter_ms, 1) + ' ms'}</td>
+      <td data-rot="Origem">${t.origem === 'auto'
+        ? '<span class="tag tag-auto" title="disparado pelo agendador diário">automático</span>'
+        : '<span class="muted">manual</span>'}</td>
       <td data-rot="Servidor" class="muted">${t.servidor || '—'}</td>
       <td data-rot="Observação">${t.erro ? `<span class="vel-erro">${falhou ? '❌' : '⚠️'} ${t.erro}</span>` : '<span class="muted">ok</span>'}</td>`;
     tb.appendChild(tr);
@@ -925,6 +1134,7 @@ function conectar() {
     estado.porta = d.porta;
     if (mudou) { preencherFiltrosDeLink(); montarLegenda(); }
     renderCards(d.links);
+    renderDnsCasa(d.dns_casa);
     atualizarBanner(d.links);
     if (estado.serieAtual) {
       nomesLinks().forEach((n) =>
@@ -951,6 +1161,14 @@ function conectar() {
     estado.vel.rodando = d;
     if (msg.textContent.startsWith('iniciando')) msg.textContent = '';
     renderVelocidade();
+  });
+
+  es.addEventListener('traceroute', (ev) => {
+    const d = JSON.parse(ev.data);
+    if (d.fase === 'fim' || d.fase === 'erro') estado.trace[d.link] = d;
+    // só pinta se o usuário ainda está olhando aquele link
+    const sel = $('tr-link');
+    if (!sel || !sel.value || sel.value === d.link) renderTrace(d);
   });
 
   es.addEventListener('alerta', (ev) => {
@@ -1069,6 +1287,9 @@ async function carregarConfig() {
     $('c-jit').value = parseFloat(c.jitter_limiar_ms);
     $('c-cool').value = parseFloat(c.cooldown_s);
     $('c-som').checked = c.som_habilitado === '1';
+    $('c-auto-on').checked = c.auto_speed_enabled === '1';
+    $('c-auto-hora').value = c.auto_speed_hora || '04:00';
+    $('c-auto-dur').value = parseFloat(c.auto_speed_dur) || 5;
     estado.somOn = c.som_habilitado === '1';
     estado.limiares = {
       lat: parseFloat(c.lat_limiar_ms) || 80,
@@ -1087,6 +1308,9 @@ async function salvarConfig() {
     jitter_limiar_ms: $('c-jit').value,
     cooldown_s: $('c-cool').value,
     som_habilitado: $('c-som').checked ? '1' : '0',
+    auto_speed_enabled: $('c-auto-on').checked ? '1' : '0',
+    auto_speed_hora: $('c-auto-hora').value || '04:00',
+    auto_speed_dur: $('c-auto-dur').value,
   };
   const msg = $('c-msg');
   try {
@@ -1306,6 +1530,14 @@ function ligarEventos() {
   });
   $('btn-reset-ok').addEventListener('click', resetar);
 
+  $('tr-rodar').addEventListener('click', rodarTrace);
+  $('tr-destino').addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') rodarTrace();
+  });
+  // trocar o link mostra o traçado anterior daquele caminho, sem traçar de novo
+  $('tr-link').addEventListener('change', () =>
+    renderTrace(estado.trace[$('tr-link').value] || null));
+
   let redraw;
   window.addEventListener('resize', () => {
     clearTimeout(redraw);
@@ -1319,7 +1551,11 @@ function ligarEventos() {
       clearTimeout(estado.timers.redesenho);
       estado.timers.redesenho = setTimeout(redesenhar, 80);
     });
-    ['wrap-lat', 'wrap-perda'].forEach((id) => obs.observe($(id)));
+    // a faixa de perda também: o número de blocos vem da largura em pixels
+    ['wrap-lat', 'perda-faixas'].forEach((id) => {
+      const el = $(id);
+      if (el) obs.observe(el);
+    });
   }
 
   if ('Notification' in window && Notification.permission === 'granted') {
@@ -1353,17 +1589,19 @@ async function iniciar() {
     preencherFiltrosDeLink();
     montarLegenda();
     renderCards(s.links);
+    renderDnsCasa(s.dns_casa);
     atualizarBanner(s.links);
     $('rodape-info').textContent =
       `netmon · servidor no ar há ${fmtDurLonga(s.servidor_uptime_s)} · porta ${s.porta}` +
       (s.port_fallback ? ' (porta 666 indisponível — veja o README)' : '');
   } catch (e) { console.error(e); }
   await Promise.all([carregarGraficos(), carregarResumo(), carregarEventos(),
-                     carregarVelocidade()]);
+                     carregarVelocidade(), carregarTrace(), carregarAlvos()]);
   conectar();
   if ($('config').open) carregarIfaces();
   setInterval(relogio, 1000);
   setInterval(carregarEventos, 60000);
+  setInterval(carregarAlvos, 60000);
   agendarAtualizacoes();
 }
 

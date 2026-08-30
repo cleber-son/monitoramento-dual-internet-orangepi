@@ -22,6 +22,7 @@ import alerts as alerts_mod          # noqa: E402
 import db                            # noqa: E402
 import probe as probe_mod            # noqa: E402
 import server as server_mod          # noqa: E402
+import speedtest as speedtest_mod    # noqa: E402
 
 LOG_PATH = os.path.join(BASE_DIR, "netmon.log")
 PID_PATH = os.path.join(BASE_DIR, "netmon.pid")
@@ -69,11 +70,76 @@ def broadcaster(app):
                     snap["uptime"] = server_mod.uptime_periodos(p.link_id, now)
                     snap["ultima_queda"] = server_mod.ultima_queda(p.link_id)
                 links.append(snap)
+            vigia = app.get("dns_casa")
             app["bus"].publish("status", {"ts": now, "porta": app.get("port"),
-                                          "links": links})
+                                          "links": links,
+                                          "dns_casa": vigia.snapshot() if vigia else None})
         except Exception:
             log.exception("falha difundindo status")
         stop.wait(BROADCAST_EVERY)
+
+
+def _hora_config():
+    """(hora, minuto) de `auto_speed_hora`, ou None se estiver invalida."""
+    txt = (db.get_config().get("auto_speed_hora") or "").strip()
+    try:
+        h, _, m = txt.partition(":")
+        h, m = int(h), int(m or 0)
+    except ValueError:
+        return None
+    if 0 <= h <= 23 and 0 <= m <= 59:
+        return (h, m)
+    return None
+
+
+def agendador_velocidade(app):
+    """Teste de velocidade automatico, uma vez por dia, nos links de internet.
+
+    Roda de madrugada porque o teste satura o link de proposito: de dia ele
+    atrapalharia o uso real da casa e ainda dispararia o alerta de latencia.
+    Os links vao UM DE CADA VEZ -- medir os dois juntos disputaria a mesma CPU
+    do Orange Pi e as duas medidas sairiam menores que a verdade.
+
+    Guarda a ultima data executada no banco, e nao na memoria: se o serviço
+    reiniciar as 4h05, nao pode disparar o teste de novo.
+    """
+    stop = app["stop"]
+    stop.wait(90)                     # deixa as sondas estabilizarem antes
+    while not stop.is_set():
+        try:
+            cfg = db.get_config()
+            if cfg.get("auto_speed_enabled") == "1":
+                alvo = _hora_config()
+                agora = time.localtime()
+                hoje = time.strftime("%Y-%m-%d", agora)
+                if alvo and db.get_meta("auto_speed_ultima") != hoje:
+                    # so dispara DEPOIS do horario, e nao antes: se o aparelho
+                    # estava desligado as 4h, o teste sai quando ele voltar
+                    if (agora.tm_hour, agora.tm_min) >= alvo:
+                        _rodar_auto(app, cfg, hoje)
+        except Exception:
+            log.exception("falha no agendador do teste de velocidade")
+        stop.wait(60)
+
+
+def _rodar_auto(app, cfg, hoje):
+    try:
+        dur = float(cfg.get("auto_speed_dur") or 5)
+    except (TypeError, ValueError):
+        dur = 5.0
+    links = [p.name_link for p in app["probes"] if p.kind == "internet"]
+    # marca a data ANTES de rodar: se um teste falhar, nao queremos que o
+    # agendador insista a cada minuto ate a meia-noite
+    db.set_meta("auto_speed_ultima", hoje)
+    log.info("teste de velocidade automatico do dia: %s", ", ".join(links))
+    for nome in links:
+        if app["stop"].is_set():
+            return
+        try:
+            speedtest_mod.executar(app, nome, dur, origem="auto")
+        except Exception as exc:
+            log.warning("teste automatico de %s falhou: %s", nome, exc)
+        app["stop"].wait(10)          # folga entre os dois links
 
 
 def maintenance(app):
@@ -84,6 +150,7 @@ def maintenance(app):
     stop.wait(20)
     while not stop.is_set():
         try:
+            reconciliar_ao_vivo(app)
             db.rollup_minutes()
             now = time.time()
             if now - last_hour >= 3600:
@@ -98,6 +165,47 @@ def maintenance(app):
         except Exception:
             log.exception("falha na manutencao")
         stop.wait(60)
+
+
+def reconciliar_placas():
+    """Reaponta cada link para a placa onde o gateway dele esta agora."""
+    try:
+        links = db.list_links()
+        achados = probe_mod.detectar_por_gateway(links)
+    except Exception:
+        log.exception("falha detectando as placas dos links")
+        return
+    for l in links:
+        nova = achados.get(l["name"])
+        if nova and nova != l["iface"]:
+            log.warning("%s mudou de placa enquanto o servico estava parado: "
+                        "%s -> %s (reconhecido pelo gateway)",
+                        l["name"], l["iface"], nova)
+            db.set_link(l["id"], iface=nova)
+
+
+def reconciliar_ao_vivo(app):
+    """Mesma reconciliacao, com o servico no ar e sem reiniciar nada.
+
+    So age quando ha sinal de que a placa saiu do lugar: interface sumiu do
+    sistema, ficou sem IP ou perdeu o gateway. Enquanto tudo estiver medindo,
+    nao mexe -- reapontar um link saudavel seria criar um buraco sem motivo.
+    """
+    suspeitos = [p for p in app["probes"]
+                 if not p.iface_up or not p.ip
+                 or not os.path.exists("/sys/class/net/" + p.iface)]
+    if not suspeitos:
+        return
+    achados = probe_mod.detectar_por_gateway(db.list_links())
+    mapa = {l["name"]: l["id"] for l in db.list_links()}
+    for p in suspeitos:
+        nova = achados.get(p.name_link)
+        if not nova or nova == p.iface:
+            continue
+        log.warning("%s: cabo trocado de porta (%s -> %s), reapontando ao vivo",
+                    p.name_link, p.iface, nova)
+        db.set_link(mapa[p.name_link], iface=nova)
+        p.trocar_iface(nova, p.target)
 
 
 def main():
@@ -115,8 +223,14 @@ def main():
 
     app = {
         "probes": [], "bus": bus, "alerts": alerts, "stop": stop,
-        "started": time.time(), "port": None,
+        "started": time.time(), "port": None, "dns_casa": None,
     }
+
+    # Cabo trocado de porta enquanto o servico estava parado: o link continua
+    # sendo o mesmo, mas o nome da placa mudou. Reencontramos cada um pelo
+    # gateway antes de subir as sondas, senao o painel voltaria do boot medindo
+    # a GIGA e chamando de IMPACTO.
+    reconciliar_placas()
 
     probes = []
     for r in db.list_links():
@@ -125,6 +239,11 @@ def main():
                                           kind=r["kind"], target=r["target"]))
     app["probes"] = probes
     alerts.probes = probes
+
+    # vigia do resolvedor da casa; depois das sondas, porque descobre o
+    # endereco a partir do link de LAN
+    dns_casa = probe_mod.SondaDnsCasa(app, stop, alerts)
+    app["dns_casa"] = dns_casa
 
     srv = server_mod.build(app)
 
@@ -143,10 +262,13 @@ def main():
     alerts.start()
     for p in probes:
         p.start()
+    dns_casa.start()
     threading.Thread(target=broadcaster, args=(app,), name="broadcast",
                      daemon=True).start()
     threading.Thread(target=maintenance, args=(app,), name="manutencao",
                      daemon=True).start()
+    threading.Thread(target=agendador_velocidade, args=(app,),
+                     name="agenda-velocidade", daemon=True).start()
 
     log.info("monitorando: %s", ", ".join("%s(%s)" % (p.name_link, p.iface)
                                           for p in probes))

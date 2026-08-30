@@ -27,6 +27,7 @@
   </div>
   <div class="topo-meta">
     <span id="conexao" class="pill pill-off">conectando…</span>
+    <span id="dns-casa" class="pill pill-neutro" title="Resolvedor que os aparelhos da casa usam. É medido pela rota normal, não preso a uma placa: os links podem estar perfeitos e ainda assim ninguém navegar.">DNS da casa: —</span>
     <span id="relogio" class="relogio">--:--:--</span>
     <button id="btn-notif" class="btn btn-ghost" type="button">Ativar notificações</button>
   </div>
@@ -37,6 +38,20 @@
 <!-- ------------------------------------------------ cards de status -->
 <section class="cards" id="cards" aria-label="Estado atual dos links"></section>
 
+<!-- ------------------------------------------------ o que é medido -->
+<section class="painel painel-fino">
+  <details id="alvos-det">
+    <summary>
+      <h2 class="inline">O que está sendo medido</h2>
+      <span class="alvos-resumo" id="alvos-resumo">—</span>
+    </summary>
+    <p class="painel-sub">Toda latência aqui é até um alvo concreto, e todo teste de DNS
+      é contra um servidor concreto. Sem isso um "4 ms" não quer dizer nada — e na hora
+      do problema ninguém lembra qual é o servidor DNS da casa.</p>
+    <div class="alvos-grid" id="alvos-grid"></div>
+  </details>
+</section>
+
 <!-- ------------------------------------------------ latência -->
 <section class="painel">
   <div class="painel-topo">
@@ -46,6 +61,8 @@
         só até a sua rede local — quando ela sobe junto com as outras, o problema é
         aqui dentro. Faixa clara = mínimo–máximo do período.</p>
     </div>
+    <div class="periodos-caixa">
+      <span class="periodos-rot">Período</span>
     <div class="periodos" id="periodos" role="group" aria-label="Período">
       <button class="btn-per" data-span="30">30s</button>
       <button class="btn-per" data-span="60">1min</button>
@@ -54,6 +71,7 @@
       <button class="btn-per ativo" data-span="86400">24h</button>
       <button class="btn-per" data-span="604800">7d</button>
       <button class="btn-per" data-span="2592000">30d</button>
+    </div>
     </div>
   </div>
   <div class="legenda" id="legenda"></div>
@@ -66,10 +84,17 @@
 <!-- ------------------------------------------------ perda -->
 <section class="painel">
   <h2>Perda de pacotes</h2>
-  <p class="painel-sub">Percentual de pacotes sem resposta em cada intervalo, uma barra por link.</p>
-  <div class="grafico-wrap" id="wrap-perda">
-    <svg id="g-perda" class="grafico grafico-baixo" role="img" aria-label="Gráfico de perda de pacotes"></svg>
-    <div class="tooltip oculto" id="tt-perda"></div>
+  <p class="painel-sub">Uma faixa por link, do começo ao fim do período. Cada bloco é um
+    intervalo, colorido pela gravidade — perda é quase sempre zero, e num gráfico de
+    linha o que importa vira um risco rente ao chão. Aqui o episódio salta aos olhos.</p>
+  <div class="perda-faixas" id="perda-faixas"></div>
+  <div class="perda-legenda">
+    <span class="leg"><i class="sw sw-p0"></i>sem perda</span>
+    <span class="leg"><i class="sw sw-p1"></i>até 2%</span>
+    <span class="leg"><i class="sw sw-p2"></i>2 a 10%</span>
+    <span class="leg"><i class="sw sw-p3"></i>10 a 50%</span>
+    <span class="leg"><i class="sw sw-p4"></i>acima de 50%</span>
+    <span class="leg"><i class="sw sw-psem"></i>sem monitoramento</span>
   </div>
 </section>
 
@@ -127,9 +152,10 @@
   <p id="v-msg" class="muted"></p>
 
   <div class="vel-log">
+    <details id="vellog-det">
+    <summary><h3 class="inline">Log dos testes de velocidade</h3></summary>
     <div class="painel-topo">
       <div>
-        <h3>Log dos testes de velocidade</h3>
         <p class="painel-sub">Todo teste já feito, com a hora, o servidor usado e o erro
           quando houve. Serve de prova junto à operadora: mostra a velocidade real
           medida em cada horário.</p>
@@ -147,20 +173,64 @@
           <th scope="col">Quando</th><th scope="col">Link</th>
           <th scope="col">↓ Download</th><th scope="col">↑ Upload</th>
           <th scope="col">Ping</th><th scope="col">Jitter</th>
+          <th scope="col">Origem</th>
           <th scope="col">Servidor</th><th scope="col">Observação</th>
         </tr></thead>
         <tbody></tbody>
       </table>
     </div>
     <p id="vel-log-info" class="muted">—</p>
+    </details>
+  </div>
+</section>
+
+<!-- ------------------------------------------------ traceroute -->
+<section class="painel">
+  <div class="painel-topo">
+    <div>
+      <h2>Traceroute</h2>
+      <p class="painel-sub">Mostra o caminho até um destino <b>saindo pelo link que você
+        escolher</b>, mesmo que ele não seja a rota padrão. É assim que se separa
+        "o problema é da minha operadora" de "o problema é lá fora": trace o mesmo
+        destino pelas duas internets e compare onde a latência dispara.</p>
+    </div>
+    <div class="filtros">
+      <label class="campo"><span>Sair por</span>
+        <select id="tr-link"></select>
+      </label>
+      <label class="campo"><span>Destino</span>
+        <input id="tr-destino" type="text" value="1.1.1.1" placeholder="IP ou nome"
+               autocomplete="off" spellcheck="false">
+      </label>
+      <label class="campo campo-curto"><span>Saltos</span>
+        <select id="tr-hops">
+          <option value="12">até 12</option>
+          <option value="20" selected>até 20</option>
+          <option value="30">até 30</option>
+        </select>
+      </label>
+      <button class="btn btn-primario" id="tr-rodar" type="button">Traçar</button>
+    </div>
+  </div>
+  <p id="tr-msg" class="muted">—</p>
+  <div class="tabela-wrap">
+    <table class="tabela" id="tab-trace">
+      <thead><tr>
+        <th scope="col">#</th><th scope="col">Endereço</th><th scope="col">Nome</th>
+        <th scope="col">País</th>
+        <th scope="col">Melhor</th><th scope="col">Média</th><th scope="col">Pior</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
   </div>
 </section>
 
 <!-- ------------------------------------------------ eventos -->
 <section class="painel">
+  <details id="eventos-det">
+  <summary><h2 class="inline">Histórico de quedas e alertas</h2></summary>
   <div class="painel-topo">
     <div>
-      <h2>Histórico de quedas e alertas</h2>
       <p class="painel-sub">Registro completo, com hora exata da queda, do retorno e a duração.</p>
     </div>
     <div class="filtros">
@@ -190,6 +260,7 @@
     <span id="ev-info" class="muted">—</span>
     <button class="btn" id="ev-next" type="button">Próximos ›</button>
   </div>
+  </details>
 </section>
 
 <!-- ------------------------------------------------ configurações -->
@@ -229,6 +300,22 @@
       </label>
       <label class="campo campo-check">
         <input type="checkbox" id="c-som"><span>Tocar som quando um link cair</span>
+      </label>
+    </div>
+    <h3 class="config-titulo">Teste de velocidade automático</h3>
+    <p class="painel-sub">Uma medição por dia, de madrugada, nas duas internets — uma de
+      cada vez. Serve de histórico junto à operadora: mostra a velocidade entregue todo
+      dia no mesmo horário. O teste satura o link de propósito, por isso roda com a casa
+      dormindo. Se o aparelho estiver desligado na hora, o teste sai quando ele voltar.</p>
+    <div class="config-grid">
+      <label class="campo campo-check">
+        <input type="checkbox" id="c-auto-on"><span>Medir a velocidade sozinho todo dia</span>
+      </label>
+      <label class="campo"><span>Horário</span>
+        <input type="time" id="c-auto-hora">
+      </label>
+      <label class="campo"><span>Duração por direção (s)</span>
+        <input type="number" id="c-auto-dur" min="3" max="30" step="1">
       </label>
     </div>
     <div class="config-acoes">

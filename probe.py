@@ -10,6 +10,7 @@ vazarem pela rota default nem pela VPN.
 
 import json
 import logging
+import os
 import random
 import re
 import socket
@@ -52,6 +53,123 @@ EXTIP_HOST = "1.1.1.1"
 EXTIP_SNI = "one.one.one.one"
 EXTIP_PATH = "/cdn-cgi/trace"
 RE_EXTIP = re.compile(r"^ip=([0-9a-fA-F.:]+)$", re.M)
+
+def alvos_das_sondas():
+    """Para onde cada sonda aponta, do jeito que a pagina mostra.
+
+    Fica aqui, e nao no servidor, porque quem define os alvos e este modulo:
+    assim a pagina nunca exibe um IP diferente do que esta sendo medido.
+    """
+    return {
+        "ping": list(PING_TARGETS),
+        "ping_intervalo_s": CYCLE,
+        "dns_servidor": DNS_SERVER,
+        "dns_nome": DNS_NAME,
+        "dns_a_cada_s": EVERY_DNS * CYCLE,
+        "tcp": "%s:%d" % TCP_TARGET,
+        "tcp_a_cada_s": EVERY_TCP * CYCLE,
+        "http": "%s (%s%s)" % (HTTP_TARGET[0], HTTP_TARGET[2], HTTP_TARGET[3]),
+        "http_a_cada_s": EVERY_HTTP * CYCLE,
+        "ip_externo": "%s (%s%s)" % (EXTIP_HOST, EXTIP_SNI, EXTIP_PATH),
+        "ip_externo_a_cada_s": EVERY_EXTIP * CYCLE,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Quem e quem depois de trocar o cabo de porta
+# ---------------------------------------------------------------------------
+# A identidade de um link e a interface, mas a interface muda quando o cabo
+# muda de porta -- e ai o painel mede a GIGA achando que e a IMPACTO. O que NAO
+# muda e o gateway: 192.168.18.1 e da GIGA, 192.168.17.1 e da IMPACTO, doa a
+# quem doer em que placa o cabo esteja. Entao guardamos o gateway visto de cada
+# link e, quando as placas se embaralham, reencontramos cada um pelo gateway.
+GW_SEMENTE = {"GIGA": "192.168.18.1", "IMPACTO": "192.168.17.1"}
+
+
+def gw_conhecido(nome):
+    v = db.get_meta("gw_conhecido:%s" % nome)
+    if isinstance(v, str) and v:
+        return v
+    return GW_SEMENTE.get(nome)
+
+
+def lembrar_gw(nome, gw):
+    if gw and gw_conhecido(nome) != gw:
+        db.set_meta("gw_conhecido:%s" % nome, gw)
+        log.info("%s: gateway conhecido agora e %s", nome, gw)
+
+
+def detectar_por_gateway(links):
+    """Descobre em que placa cada link esta agora. Devolve {NOME: iface}.
+
+    Um link so entra no resultado se o gateway dele foi encontrado em UMA placa:
+    na duvida nao mexemos, porque apontar o link para a placa errada e pior do
+    que deixar como esta. O link de LAN e reconhecido pela rede do alvo dele
+    (o roteador de casa), que tambem nao muda de endereco.
+    """
+    try:
+        nomes = [n for n in sorted(os.listdir("/sys/class/net"))
+                 if not n.startswith(("lo", "nordlynx", "docker", "br-", "veth",
+                                      "tun", "tap", "wg"))]
+    except OSError:
+        return {}
+
+    placas = {}
+    for n in nomes:
+        ip, gw, up = iface_info(n)
+        placas[n] = {"ip": ip, "gw": gw, "up": up}
+
+    achados, tomadas = {}, set()
+    for l in links:
+        nome = l["name"]
+        if l.get("kind") == "lan":
+            # o alvo e um IP da rede de casa: a placa certa e a que tem endereco
+            # na mesma rede /24
+            alvo = l.get("target") or ""
+            rede = alvo.rsplit(".", 1)[0] + "." if alvo.count(".") == 3 else None
+            cand = [n for n, d in placas.items()
+                    if rede and d["ip"] and d["ip"].startswith(rede)]
+        else:
+            gw = gw_conhecido(nome)
+            cand = [n for n, d in placas.items() if gw and d["gw"] == gw]
+        cand = [n for n in cand if n not in tomadas]
+        if len(cand) == 1:
+            achados[nome] = cand[0]
+            tomadas.add(cand[0])
+    return achados
+
+
+def dns_do_sistema():
+    """Resolvedores do /etc/resolv.conf -- o DNS que o resto do aparelho usa.
+
+    Nao e o mesmo que o das sondas, e a diferenca importa: aqui costuma estar o
+    Pi-hole (127.0.0.1), que mediria o filtro local e nao o link.
+    """
+    saida = []
+    try:
+        with open("/etc/resolv.conf", encoding="utf-8", errors="replace") as fh:
+            for linha in fh:
+                partes = linha.split()
+                if len(partes) >= 2 and partes[0] == "nameserver":
+                    saida.append(partes[1])
+    except OSError:
+        pass
+    return saida
+
+
+def dns_da_interface(iface):
+    """DNS que o DHCP daquela placa entregou (o resolvedor da operadora)."""
+    res = _run(["nmcli", "-t", "-f", "IP4.DNS", "device", "show", iface], timeout=5)
+    if not res or res.returncode != 0:
+        return []
+    fora = []
+    for linha in res.stdout.splitlines():
+        _, _, valor = linha.partition(":")
+        valor = valor.strip()
+        if valor and valor not in fora:
+            fora.append(valor)
+    return fora
+
 
 RE_LOSS = re.compile(r"([\d.]+)% packet loss")
 RE_RTT = re.compile(r"=\s*([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+)\s*ms")
@@ -184,6 +302,221 @@ def dns_probe(iface, timeout=2.0):
         return -1.0
     finally:
         sock.close()
+
+
+# --------------------------------------------------------------------------
+# DNS da casa: o resolvedor que os outros aparelhos usam (o Pi-hole)
+# --------------------------------------------------------------------------
+# Existe separado do dns_probe de propósito. O dns_probe mede o LINK: sai preso
+# a uma interface e vai direto num resolvedor publico. Em 30/08 isso mostrou
+# "DNS 4,5 ms, tudo certo" enquanto a casa inteira estava sem resolucao de nome,
+# porque o que tinha quebrado era a rota padrao ate os upstreams do Pi-hole --
+# caminho que nenhuma sonda de link percorre. Esta sonda faz o contrario: usa a
+# rota normal, sem prender a interface, e pergunta ao proprio Pi-hole.
+DNS_CASA_ZONA = "dnscheck-netmon.example.com"   # nunca existe: a resposta e NXDOMAIN
+
+
+def resolver_probe(servidor, timeout=3.0):
+    """Pergunta um nome ALEATORIO ao resolvedor da casa, pela rota normal.
+
+    O nome muda a cada consulta porque um nome fixo seria respondido do cache do
+    dnsmasq: o Pi-hole continuaria "respondendo" com os upstreams inalcancaveis,
+    que e exatamente o estado que precisamos detectar. Como o nome nao existe, a
+    resposta certa e NXDOMAIN -- e recebe-la ja prova que a recursao chegou la
+    fora e voltou. Sucesso = NOERROR ou NXDOMAIN; SERVFAIL e silencio = falha.
+    """
+    nome = "%08x.%s" % (random.getrandbits(32), DNS_CASA_ZONA)
+    tid = random.getrandbits(16)
+    pkt = struct.pack(">HHHHHH", tid, 0x0100, 1, 0, 0, 0)
+    for label in nome.split("."):
+        pkt += bytes([len(label)]) + label.encode()
+    pkt += b"\x00" + struct.pack(">HH", 1, 1)
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.settimeout(timeout)
+        t0 = time.monotonic()
+        sock.sendto(pkt, (servidor, 53))
+        deadline = t0 + timeout
+        while time.monotonic() < deadline:
+            sock.settimeout(max(0.05, deadline - time.monotonic()))
+            data, _ = sock.recvfrom(2048)
+            if len(data) < 4 or struct.unpack(">H", data[:2])[0] != tid:
+                continue
+            ms = round((time.monotonic() - t0) * 1000, 2)
+            rcode = struct.unpack(">H", data[2:4])[0] & 0x0F
+            if rcode in (0, 3):                      # NOERROR / NXDOMAIN
+                return {"ok": True, "ms": ms, "rcode": rcode, "erro": None}
+            return {"ok": False, "ms": ms, "rcode": rcode,
+                    "erro": "resolvedor respondeu rcode %d (sem acesso aos "
+                            "upstreams?)" % rcode}
+        return {"ok": False, "ms": None, "rcode": None,
+                "erro": "sem resposta em %.0fs" % timeout}
+    except OSError as exc:
+        return {"ok": False, "ms": None, "rcode": None,
+                "erro": str(exc) or exc.__class__.__name__}
+    finally:
+        sock.close()
+
+
+def _eh_privado(ip):
+    """RFC1918 / loopback -- endereco que so pode ser um resolvedor da casa."""
+    try:
+        a, b = (int(x) for x in ip.split(".")[:2])
+    except ValueError:
+        return False
+    return (a == 10 or a == 127 or (a == 172 and 16 <= b <= 31)
+            or (a == 192 and b == 168))
+
+
+def ips_locais_privados():
+    """Todo IPv4 privado deste aparelho, por interface. {ip: iface}.
+
+    O Pi-hole escuta em 0.0.0.0, entao responde em qualquer um deles -- e
+    qualquer um pode estar configurado como servidor DNS num aparelho da casa.
+    """
+    fora = {}
+    res = _run(["ip", "-j", "addr", "show"])
+    if not res or res.returncode != 0 or not res.stdout.strip():
+        return fora
+    try:
+        dados = json.loads(res.stdout)
+    except ValueError:
+        return fora
+    for entrada in dados:
+        nome = entrada.get("ifname")
+        if not nome or nome == "lo" or entrada.get("operstate") not in ("UP", "UNKNOWN"):
+            continue
+        for a in entrada.get("addr_info", []):
+            ip = a.get("local")
+            if a.get("family") == "inet" and ip and _eh_privado(ip) and not ip.startswith("127."):
+                fora[ip] = nome
+    return fora
+
+
+class SondaDnsCasa:
+    """Vigia TODOS os enderecos em que este aparelho serve DNS.
+
+    Um so endereco nao basta. Este Pi responde DNS em varios IPs ao mesmo tempo
+    (o fixo anunciado pelo DHCP, o que ele pegou de lease, o da LAN), e cada
+    aparelho da casa pode ter sido configurado com um deles: o roteador do
+    usuario, por exemplo, pergunta pelo IP de LEASE, nao pelo fixo. Vigiar so um
+    deixaria o outro cair em silencio -- foi assim que o apagao de 30/08 passou
+    despercebido pelo painel. Falhou qualquer um, o alerta sai nomeando qual.
+    """
+
+    INTERVALO = 30          # segundos entre rodadas
+    CONFIRMA = 2            # falhas seguidas para declarar queda
+
+    def __init__(self, app, stop, alerts=None):
+        self.app = app
+        self.stop = stop
+        self.alerts = alerts
+        self.ok = None
+        self.desde = None
+        self.servidores = {}      # ip -> {ok, ms, erro, falhas, desde, papel}
+        self.thread = threading.Thread(target=self._loop, name="dns-casa",
+                                       daemon=True)
+
+    def start(self):
+        self.thread.start()
+
+    def _descobrir_servidores(self):
+        """[(ip, papel)] -- quem vigiar e por que aquele endereco importa."""
+        cfg = db.get_config()
+        fixo = (cfg.get("dns_casa_servidor") or "").strip()
+        if fixo:
+            return [(x.strip(), "configurado a mao") for x in fixo.split(",") if x.strip()]
+
+        achados = []
+        vistos = set()
+
+        def juntar(ip, papel):
+            if ip and ip not in vistos:
+                vistos.add(ip)
+                achados.append((ip, papel))
+
+        # 1) o que o DHCP da rede ANUNCIA como servidor DNS: e o endereco que os
+        #    aparelhos configuram sozinhos, e o primeiro que precisa funcionar
+        for p in self.app.get("probes", []):
+            if p.kind != "internet" or not p.iface:
+                continue
+            for ip in dns_da_interface(p.iface):
+                if _eh_privado(ip):
+                    juntar(ip, "anunciado pelo DHCP da %s" % p.name_link)
+
+        # 2) os demais enderecos deste aparelho: alguem pode ter apontado para
+        #    qualquer um deles na mao (o roteador aponta para o de lease)
+        for ip, iface in sorted(ips_locais_privados().items()):
+            juntar(ip, "endereco deste aparelho em %s" % iface)
+
+        return achados or [("127.0.0.1", "loopback (nenhum endereco encontrado)")]
+
+    def snapshot(self):
+        lista = [dict(d, servidor=ip) for ip, d in self.servidores.items()]
+        lista.sort(key=lambda d: (d.get("ok") is not False, d["servidor"]))
+        ruins = [d for d in lista if d.get("ok") is False]
+        return {
+            "ok": self.ok,
+            "desde": self.desde,
+            "zona": DNS_CASA_ZONA,
+            "servidores": lista,
+            # o principal e o anunciado pelo DHCP; a pilula do topo mostra ele
+            "servidor": lista[0]["servidor"] if lista else None,
+            "ms": next((d["ms"] for d in lista if d.get("ok")), None),
+            "erro": ruins[0]["erro"] if ruins else None,
+            "falhando": [d["servidor"] for d in ruins],
+        }
+
+    def _loop(self):
+        while not self.stop.is_set():
+            try:
+                self._rodada()
+            except Exception:
+                log.exception("falha na sonda de DNS da casa")
+            self.stop.wait(self.INTERVALO)
+
+    def _rodada(self):
+        agora = int(time.time())
+        atuais = self._descobrir_servidores()
+        # endereco que sumiu (lease liberada, placa fora) deixa de ser vigiado
+        for ip in list(self.servidores):
+            if ip not in [x[0] for x in atuais]:
+                del self.servidores[ip]
+
+        for ip, papel in atuais:
+            est = self.servidores.setdefault(
+                ip, {"ok": None, "ms": None, "erro": None, "falhas": 0,
+                     "desde": None, "papel": papel})
+            est["papel"] = papel
+            r = resolver_probe(ip)
+            est["ms"] = r["ms"]
+            est["erro"] = r["erro"]
+            if r["ok"]:
+                est["falhas"] = 0
+                if est["ok"] is not True:
+                    antes, est["ok"] = est["ok"], True
+                    est["desde"] = agora
+                    if antes is False:
+                        log.warning("DNS da casa em %s (%s) voltou a resolver",
+                                    ip, papel)
+                        if self.alerts:
+                            self.alerts.on_dns_casa(True, ip, r, papel)
+            else:
+                est["falhas"] += 1
+                if est["ok"] is not False and est["falhas"] >= self.CONFIRMA:
+                    est["ok"] = False
+                    est["desde"] = agora
+                    log.error("DNS da casa em %s (%s) parou de resolver: %s",
+                              ip, papel, r["erro"])
+                    if self.alerts:
+                        self.alerts.on_dns_casa(False, ip, r, papel)
+
+        conhecidos = [e["ok"] for e in self.servidores.values() if e["ok"] is not None]
+        novo = all(conhecidos) if conhecidos else None
+        if novo != self.ok:
+            self.ok = novo
+            self.desde = agora
 
 
 def tcp_probe(iface, timeout=3.0):
@@ -428,6 +761,11 @@ class LinkProbe(threading.Thread):
             "name": self.name_link,
             "kind": self.kind,
             "target": self.target,
+            # o alvo do ping vai junto do estado: e a primeira pergunta de quem
+            # olha um numero de latencia -- "latencia ate onde?"
+            "alvo_ping": (self.target or self.gateway) if self.kind == "lan"
+                         else PING_TARGETS[0],
+            "alvo_dns": None if self.kind == "lan" else DNS_SERVER,
             "iface": self.iface,
             "ip": self.ip,
             "ip_externo": self.ip_externo,
@@ -468,6 +806,10 @@ class LinkProbe(threading.Thread):
         # dele pode nao ser o gateway default daquela placa
         if self.kind == "lan" and self.target:
             self.gateway = self.target
+        elif self.kind == "internet" and self.gateway and self.iface_up:
+            # guarda o gateway desta operadora: e por ele que o link e
+            # reencontrado quando o cabo mudar de porta
+            lembrar_gw(self.name_link, self.gateway)
 
     def _reconcile_open_events(self):
         """Depois de um restart, eventos abertos deste link voltam a ser rastreados."""

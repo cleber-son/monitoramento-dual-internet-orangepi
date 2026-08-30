@@ -222,6 +222,11 @@ def post_json(url, payload, iface=None, timeout=10):
 # ---------------------------------------------------------------------------
 # Gerenciador de alertas
 # ---------------------------------------------------------------------------
+class _AlvoDns:
+    """Fica no lugar do LinkProbe no _emit: ele so precisa de name_link."""
+    name_link = "DNS"
+
+
 class Alerts:
     def __init__(self, bus, stop_event):
         self.bus = bus
@@ -271,6 +276,50 @@ class Alerts:
                                 int(time.time()), None, None, False, msg)
         self._emit("latencia_normalizada", probe, payload, event_id,
                    ignore_cooldown=True)
+
+    def on_dns_casa(self, ok, servidor, resultado, papel=None):
+        """DNS da casa caiu/voltou.
+
+        Nao passa por um LinkProbe: a falha nao e de um link, e do resolvedor.
+        Em 30/08 os dois links estavam UP e mesmo assim ninguem navegava.
+        """
+        agora = int(time.time())
+        onde = "%s%s" % (servidor, " — %s" % papel if papel else "")
+        if ok:
+            msg = "🟢 DNS da casa (%s) voltou a resolver as %s" % (onde, fmt_hora(agora))
+            log.warning(msg)
+        else:
+            msg = "🔴 DNS da casa (%s) parou de resolver as %s — %s. Os links " \
+                  "podem estar no ar e ninguem navegar." % (
+                      onde, fmt_hora(agora),
+                      resultado.get("erro") or "sem resposta")
+            log.error(msg)
+        payload = {
+            "source": "netmon",
+            "host": socket.gethostname(),
+            "event": "dns_casa_ok" if ok else "dns_casa_falha",
+            "link": "DNS",
+            "iface": None,
+            "estado": "UP" if ok else "DOWN",
+            "causa": None if ok else "resolvedor",
+            "inicio": fmt_iso(agora),
+            "fim": None,
+            "inicio_ts": agora,
+            "fim_ts": None,
+            "duracao_s": None,
+            "duracao_txt": None,
+            "flapping": False,
+            "metricas": {
+                "servidor": servidor,
+                "papel": papel,
+                "ms": resultado.get("ms"),
+                "rcode": resultado.get("rcode"),
+                "erro": resultado.get("erro"),
+            },
+            "mensagem": msg,
+        }
+        self._emit("dns_casa:%s" % servidor, _AlvoDns(), payload, None,
+                   ignore_cooldown=ok)
 
     # -- internos ---------------------------------------------------------
     def _payload(self, event, probe, estado, causa, inicio, fim, dur, flapping, msg):

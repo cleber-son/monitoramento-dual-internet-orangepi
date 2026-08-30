@@ -78,6 +78,7 @@ main {
 }
 .pill-on  { color: #baf0ba; border-color: rgba(12,163,12,.5); background: rgba(12,163,12,.14); }
 .pill-off { color: #f3c0c0; border-color: rgba(208,59,59,.5); background: rgba(208,59,59,.14); }
+.pill-neutro { color: #b9c2cf; border-color: rgba(160,170,185,.4); background: rgba(160,170,185,.12); }
 
 /* ------------------------------------------------------------ alerta */
 .alerta {
@@ -726,3 +727,79 @@ body { overflow-x: hidden; }
   background: var(--surface);
   z-index: 1;
 }
+
+
+/* ------------------------------------------------------------ período */
+/* O filtro de período muda TUDO que está abaixo dele (latência, perda,
+   estatísticas, linha do tempo). Estava com cara de botão secundário e passava
+   despercebido — daí a pergunta recorrente de "por que o gráfico está vazio?"
+   com 30 s selecionado. */
+.periodos-caixa {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--borda);
+  border-radius: 11px;
+  background: var(--surface-2);
+}
+.periodos-rot {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: .09em;
+  color: var(--muted); font-weight: 600; white-space: nowrap;
+}
+.btn-per { font-size: 0.88rem; padding: 7px 14px; font-weight: 600; }
+.btn-per.ativo {
+  background: #2f7ae0; border-color: #4a93f0; color: #fff;
+  box-shadow: 0 0 0 2px rgba(47,122,224,.28);
+}
+
+/* ------------------------------------------------------------ perda */
+.perda-faixas { display: flex; flex-direction: column; gap: 9px; margin-top: 6px; }
+.perda-linha { display: grid; grid-template-columns: 92px 1fr auto; align-items: center; gap: 10px; }
+.perda-nome { font-size: 0.82rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.perda-barra {
+  display: flex; height: 26px; border-radius: 6px; overflow: hidden;
+  border: 1px solid var(--borda); background: var(--surface-2);
+}
+.perda-bloco { flex: 1 1 0; min-width: 0; }
+.perda-resumo { font-size: 0.76rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.perda-eixo { display: flex; justify-content: space-between; font-size: 0.7rem; color: var(--muted); margin-left: 102px; }
+.perda-legenda { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; font-size: 0.76rem; color: var(--muted); }
+.sw-p0 { background: #2f6f3f; }
+.sw-p1 { background: #c9a227; }
+.sw-p2 { background: #e07b39; }
+.sw-p3 { background: #d64545; }
+.sw-p4 { background: #8f1f1f; }
+.sw-psem { background: #3a3a37; }
+
+@media (max-width: 560px) {
+  .perda-linha { grid-template-columns: 68px 1fr; }
+  .perda-resumo { grid-column: 2; text-align: right; }
+  .perda-eixo { margin-left: 78px; }
+}
+
+/* ------------------------------------------ seções minimizadas */
+h2.inline, h3.inline { display: inline; }
+#eventos-det > summary, #vellog-det > summary { cursor: pointer; padding: 2px 0; }
+#eventos-det[open] > summary, #vellog-det[open] > summary { margin-bottom: 8px; }
+
+/* ------------------------------------------------------------ traceroute */
+.tr-pais { white-space: nowrap; }
+.tr-bandeira { font-size: 1.05rem; line-height: 1; margin-right: 5px; }
+
+.tag-auto {
+  font-size: 0.68rem; padding: 2px 7px; border-radius: 999px;
+  background: rgba(47,122,224,.16); color: #9dc6ff;
+  border: 1px solid rgba(47,122,224,.42); white-space: nowrap;
+}
+
+/* ------------------------------------------------------------ alvos */
+.painel-fino { padding-top: 12px; padding-bottom: 12px; }
+#alvos-det > summary { cursor: pointer; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.alvos-resumo { font-size: 0.82rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.alvos-grid {
+  display: grid; gap: 10px; margin-top: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+.alvo { border: 1px solid var(--borda); border-radius: 9px; padding: 9px 11px; background: var(--surface-2); }
+.alvo-rot { font-size: 0.68rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 600; }
+.alvo-val { font-size: 0.95rem; font-weight: 600; margin-top: 3px; word-break: break-word; font-variant-numeric: tabular-nums; }
+.alvo-obs { font-size: 0.72rem; color: var(--muted); margin-top: 4px; line-height: 1.35; }

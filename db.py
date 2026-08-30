@@ -92,7 +92,8 @@ CREATE TABLE IF NOT EXISTS speedtests (
   dur_down   REAL,
   dur_up     REAL,
   servidor   TEXT,
-  erro       TEXT
+  erro       TEXT,
+  origem     TEXT NOT NULL DEFAULT 'manual'
 );
 CREATE INDEX IF NOT EXISTS idx_speed ON speedtests(link_id, ts DESC);
 
@@ -111,6 +112,12 @@ DEFAULT_CONFIG = {
     "jitter_limiar_ms": "60",
     "som_habilitado": "1",
     "cooldown_s": "300",
+    # Teste de velocidade automatico: todo dia de madrugada, um link de cada
+    # vez. As 4h porque a casa esta dormindo -- o teste satura o link de
+    # proposito e atrapalharia qualquer uso real.
+    "auto_speed_enabled": "1",
+    "auto_speed_hora": "04:00",
+    "auto_speed_dur": "5",
 }
 
 # A identidade de cada link e a INTERFACE, nunca um IP: o gateway e o endereco
@@ -188,12 +195,28 @@ def _migrar_links(conn):
     conn.executescript("DROP TABLE links; ALTER TABLE links_novo RENAME TO links;")
 
 
+# Colunas acrescentadas depois da primeira versao. O banco de quem ja rodava a
+# versao anterior nao e recriado: a coluna e adicionada no lugar.
+COLUNAS_NOVAS = [
+    ("speedtests", "origem", "TEXT NOT NULL DEFAULT 'manual'"),
+]
+
+
+def _migrar_colunas(conn):
+    for tabela, coluna, tipo in COLUNAS_NOVAS:
+        existentes = {r["name"] for r in conn.execute("PRAGMA table_info(%s)" % tabela)}
+        if coluna not in existentes:
+            conn.execute("ALTER TABLE %s ADD COLUMN %s %s" % (tabela, coluna, tipo))
+            log.info("banco migrado: coluna %s.%s criada", tabela, coluna)
+
+
 def init():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = connect()
     try:
         conn.executescript(SCHEMA)
         _migrar_links(conn)
+        _migrar_colunas(conn)
         for lid, name, iface, kind, target in LINKS:
             # so o nome e o tipo sao reafirmados a cada boot; iface e target sao
             # do usuario a partir do momento em que ele os escolhe na interface
@@ -414,7 +437,18 @@ def count_recent_events(link_id, type_, since_ts):
 # Testes de velocidade (sincrono: sao raros e disparados a mao)
 # --------------------------------------------------------------------------
 SPEED_COLS = ("link_id", "ts", "down_mbps", "up_mbps", "ping_ms", "jitter_ms",
-              "bytes_down", "bytes_up", "dur_down", "dur_up", "servidor", "erro")
+              "bytes_down", "bytes_up", "dur_down", "dur_up", "servidor", "erro",
+              "origem")
+
+
+def _valor_speed(row, col):
+    # `origem` e NOT NULL: o DEFAULT do schema so vale quando a coluna e omitida
+    # do INSERT, e aqui ela vem sempre na lista. Um teste antigo (ou um que
+    # falhou antes de definir a origem) chegaria com None e quebraria o INSERT --
+    # foi o que derrubou todo teste de velocidade em 30/08.
+    if col == "origem":
+        return row.get("origem") or "manual"
+    return row.get(col)
 
 
 def save_speedtest(row):
@@ -424,7 +458,7 @@ def save_speedtest(row):
             cur = conn.execute(
                 "INSERT INTO speedtests(%s) VALUES(%s)"
                 % (",".join(SPEED_COLS), ",".join("?" * len(SPEED_COLS))),
-                tuple(row.get(c) for c in SPEED_COLS),
+                tuple(_valor_speed(row, c) for c in SPEED_COLS),
             )
             conn.commit()
             return cur.lastrowid

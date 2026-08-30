@@ -304,15 +304,19 @@ def _sonda(app, nome):
     return None
 
 
-def executar(app, nome, dur=DUR_PADRAO):
-    """Roda o teste inteiro (ping, download, upload) e grava no banco."""
+def executar(app, nome, dur=DUR_PADRAO, origem="manual"):
+    """Roda o teste inteiro (ping, download, upload) e grava no banco.
+
+    `origem` separa o que o usuario pediu no botao ("manual") do que o
+    agendador disparou sozinho ("auto") -- os relatorios filtram por isso.
+    """
     sonda = _sonda(app, nome)
     if sonda is None:
         raise RuntimeError("link desconhecido: %s" % nome)
     iface = sonda.iface
     dur = max(DUR_MIN, min(DUR_MAX, float(dur)))
     inicio = int(time.time())
-    linha = {"link_id": sonda.link_id, "ts": inicio}
+    linha = {"link_id": sonda.link_id, "ts": inicio, "origem": origem}
     parcial = {"link": nome, "iface": iface, "ts": inicio, "dur": dur}
 
     def passo(fase, pct=0.0, mbps=None, **extra):
@@ -372,7 +376,7 @@ def executar(app, nome, dur=DUR_PADRAO):
     return resultado
 
 
-def iniciar(app, nome, dur=DUR_PADRAO):
+def iniciar(app, nome, dur=DUR_PADRAO, origem="manual"):
     """Dispara o teste numa thread. Levanta RuntimeError se ja houver um rodando."""
     if not _lock.acquire(blocking=False):
         atual = em_andamento() or {}
@@ -380,7 +384,7 @@ def iniciar(app, nome, dur=DUR_PADRAO):
 
     def alvo():
         try:
-            executar(app, nome, dur)
+            executar(app, nome, dur, origem)
         finally:
             _lock.release()
 
