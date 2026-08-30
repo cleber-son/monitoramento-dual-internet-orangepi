@@ -60,7 +60,7 @@ Um detalhe que muda o risco de tudo: **este mesmo aparelho é o servidor DNS da
 rede `192.168.18.0/24`**, em `192.168.18.2`, e o roteador principal fica atrás
 dele — ou seja, a casa inteira depende deste Orange Pi para resolver nome.
 Quando ele sai do ar, ou só troca de endereço, ninguém navega mesmo com as duas
-internets perfeitas. É daí que vem a sonda de **DNS da casa**, mais abaixo.
+internets perfeitas. É daí que vem a sonda de **DNS da LAN**, mais abaixo.
 
 As duas redes são **cascateadas**, não paralelas — sair pelo adaptador USB é dar
 a volta com NAT duplo. Por isso cada sonda é **presa à interface**
@@ -87,7 +87,7 @@ relatórios que vão para a operadora.
 |---|---|
 | 🔴 **Detecta queda em ~4 s** | 2 ciclos ruins nos dois alvos de ping. A hora registrada é a do **primeiro** ciclo ruim — a hora real em que caiu, não a da confirmação |
 | 🟡 **Separa "caiu o provedor" de "caiu o roteador"** | pinga o gateway em paralelo; se ele responde e a internet não, a culpa é de lá |
-| 🧭 **Vigia o DNS da casa** | este aparelho é o servidor DNS da rede: uma sonda separada, pela rota normal, avisa quando ninguém consegue navegar apesar dos links no ar |
+| 🧭 **Vigia o DNS da LAN** | este aparelho é o servidor DNS da rede: uma sonda separada, pela rota normal, avisa quando ninguém consegue navegar apesar dos links no ar |
 | 🚀 **Testa a velocidade de cada link** | download e upload reais, um botão por internet — e uma medição automática por dia, de madrugada |
 | 🗺️ **Traça o caminho por cada internet** | traceroute próprio, sem root e sem o binário, com a bandeira do país de cada salto |
 | 📈 **Guarda 5 anos de histórico** | amostras de 2 s por 48 h, minuto por 90 dias, hora por 5 anos — e estabiliza abaixo de 70 MB |
@@ -142,7 +142,7 @@ próprio aparelho, gráficos em SVG desenhados na unha.
 | Redetecção de IP e gateway | 60 s | sobrevive a troca de cabo e de rede |
 | IP externo (TLS em `1.1.1.1/cdn-cgi/trace`) | 5 min | o IP público **de cada link**, e o aviso quando ele muda |
 | ICMP até o roteador de casa (link `LAN`) | 2 s | separa problema da operadora de problema da rede interna |
-| **DNS da casa**, pela rota normal | 30 s | descobre que ninguém está navegando mesmo com os links no ar |
+| **DNS da LAN**, pela rota normal | 30 s | descobre que ninguém está navegando mesmo com os links no ar |
 
 O IP externo sai preso à interface, então cada link responde com o endereço que
 o mundo realmente vê saindo por ele — é o número que a operadora pede no
@@ -153,7 +153,7 @@ As três sondas ICMP de cada ciclo rodam **juntas**. Em série, um ciclo com o
 link caído custaria ~4,6 s de timeouts somados; em paralelo custa ~1,5 s — é o
 que permite confirmar uma queda em 3–4 s.
 
-## A sonda que faltava: o DNS da casa
+## A sonda que faltava: o DNS da LAN
 
 Todas as sondas acima são **presas à interface** e apontam para um resolvedor
 público. Isso é certo para medir o *link* — e foi exatamente o que deixou o
@@ -164,7 +164,7 @@ e **ninguém na casa conseguia abrir um site**. O que tinha quebrado era a rota
 até os upstreams do Pi-hole e, depois, o endereço em que ele atendia — caminho
 que nenhuma sonda de link percorre.
 
-A sonda de DNS da casa faz o contrário de todas as outras:
+A sonda de DNS da LAN faz o contrário de todas as outras:
 
 - vai pela **rota normal**, sem `SO_BINDTODEVICE` — é o caminho do resto da casa;
 - pergunta a **todos** os endereços em que este aparelho serve DNS, não a um só.
@@ -342,7 +342,7 @@ roteamento continua exatamente como estava.
 | `GET /api/speedtest.csv?link=` | o log inteiro dos testes em CSV |
 | `GET /api/traceroute?link=` | último traçado de cada link, e o que está rodando |
 | `POST /api/traceroute` | traça o caminho saindo por um link: `{"link":"GIGA","destino":"1.1.1.1"}` |
-| `GET /api/alvos` | para onde cada sonda aponta e o estado de cada servidor DNS da casa |
+| `GET /api/alvos` | para onde cada sonda aponta e o estado de cada servidor DNS da LAN |
 | `GET /api/config` · `POST /api/config` | limiares, webhook, som, teste de velocidade automático |
 | `GET /api/links` | links, a placa de cada um e todas as placas do sistema |
 | `POST /api/links` | troca a placa (e o alvo do link LAN) ao vivo: `{"links":{"GIGA":{"iface":"eth0"}}}` |
@@ -391,7 +391,7 @@ static/       index.html, app.js, style.css
   estáticas fixando `1.1.1.1` e `8.8.8.8` numa única placa, o que falseava a
   medição do outro link. Elas foram removidas em 30/08 — e a remoção teve um
   motivo maior: depois que uma placa trocou de papel, aquelas rotas apontavam
-  para um gateway inalcançável e **derrubaram o DNS da casa inteira**. Rota
+  para um gateway inalcançável e **derrubaram o DNS da LAN inteira**. Rota
   estática gravada em perfil do NetworkManager sobrevive a reboot e não aparece
   num `nmcli con show` resumido.
 - **Um servidor DNS não pode ter IP de DHCP.** O `192.168.18.2` vinha de reserva

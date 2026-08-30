@@ -305,7 +305,7 @@ def dns_probe(iface, timeout=2.0):
 
 
 # --------------------------------------------------------------------------
-# DNS da casa: o resolvedor que os outros aparelhos usam (o Pi-hole)
+# DNS da LAN: o resolvedor que os outros aparelhos usam (o Pi-hole)
 # --------------------------------------------------------------------------
 # Existe separado do dns_probe de propósito. O dns_probe mede o LINK: sai preso
 # a uma interface e vai direto num resolvedor publico. Em 30/08 isso mostrou
@@ -313,7 +313,7 @@ def dns_probe(iface, timeout=2.0):
 # porque o que tinha quebrado era a rota padrao ate os upstreams do Pi-hole --
 # caminho que nenhuma sonda de link percorre. Esta sonda faz o contrario: usa a
 # rota normal, sem prender a interface, e pergunta ao proprio Pi-hole.
-DNS_CASA_ZONA = "dnscheck-netmon.example.com"   # nunca existe: a resposta e NXDOMAIN
+DNS_LAN_ZONA = "dnscheck-netmon.example.com"   # nunca existe: a resposta e NXDOMAIN
 
 
 def resolver_probe(servidor, timeout=3.0):
@@ -325,7 +325,7 @@ def resolver_probe(servidor, timeout=3.0):
     resposta certa e NXDOMAIN -- e recebe-la ja prova que a recursao chegou la
     fora e voltou. Sucesso = NOERROR ou NXDOMAIN; SERVFAIL e silencio = falha.
     """
-    nome = "%08x.%s" % (random.getrandbits(32), DNS_CASA_ZONA)
+    nome = "%08x.%s" % (random.getrandbits(32), DNS_LAN_ZONA)
     tid = random.getrandbits(16)
     pkt = struct.pack(">HHHHHH", tid, 0x0100, 1, 0, 0, 0)
     for label in nome.split("."):
@@ -394,7 +394,7 @@ def ips_locais_privados():
     return fora
 
 
-class SondaDnsCasa:
+class SondaDnsLan:
     """Vigia TODOS os enderecos em que este aparelho serve DNS.
 
     Um so endereco nao basta. Este Pi responde DNS em varios IPs ao mesmo tempo
@@ -415,7 +415,7 @@ class SondaDnsCasa:
         self.ok = None
         self.desde = None
         self.servidores = {}      # ip -> {ok, ms, erro, falhas, desde, papel}
-        self.thread = threading.Thread(target=self._loop, name="dns-casa",
+        self.thread = threading.Thread(target=self._loop, name="dns-lan",
                                        daemon=True)
 
     def start(self):
@@ -424,7 +424,7 @@ class SondaDnsCasa:
     def _descobrir_servidores(self):
         """[(ip, papel)] -- quem vigiar e por que aquele endereco importa."""
         cfg = db.get_config()
-        fixo = (cfg.get("dns_casa_servidor") or "").strip()
+        fixo = (cfg.get("dns_lan_servidor") or "").strip()
         if fixo:
             return [(x.strip(), "configurado a mao") for x in fixo.split(",") if x.strip()]
 
@@ -459,7 +459,7 @@ class SondaDnsCasa:
         return {
             "ok": self.ok,
             "desde": self.desde,
-            "zona": DNS_CASA_ZONA,
+            "zona": DNS_LAN_ZONA,
             "servidores": lista,
             # o principal e o anunciado pelo DHCP; a pilula do topo mostra ele
             "servidor": lista[0]["servidor"] if lista else None,
@@ -473,7 +473,7 @@ class SondaDnsCasa:
             try:
                 self._rodada()
             except Exception:
-                log.exception("falha na sonda de DNS da casa")
+                log.exception("falha na sonda de DNS da LAN")
             self.stop.wait(self.INTERVALO)
 
     def _rodada(self):
@@ -498,19 +498,19 @@ class SondaDnsCasa:
                     antes, est["ok"] = est["ok"], True
                     est["desde"] = agora
                     if antes is False:
-                        log.warning("DNS da casa em %s (%s) voltou a resolver",
+                        log.warning("DNS da LAN em %s (%s) voltou a resolver",
                                     ip, papel)
                         if self.alerts:
-                            self.alerts.on_dns_casa(True, ip, r, papel)
+                            self.alerts.on_dns_lan(True, ip, r, papel)
             else:
                 est["falhas"] += 1
                 if est["ok"] is not False and est["falhas"] >= self.CONFIRMA:
                     est["ok"] = False
                     est["desde"] = agora
-                    log.error("DNS da casa em %s (%s) parou de resolver: %s",
+                    log.error("DNS da LAN em %s (%s) parou de resolver: %s",
                               ip, papel, r["erro"])
                     if self.alerts:
-                        self.alerts.on_dns_casa(False, ip, r, papel)
+                        self.alerts.on_dns_lan(False, ip, r, papel)
 
         conhecidos = [e["ok"] for e in self.servidores.values() if e["ok"] is not None]
         novo = all(conhecidos) if conhecidos else None

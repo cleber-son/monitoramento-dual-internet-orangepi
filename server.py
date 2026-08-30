@@ -179,8 +179,8 @@ class Handler(BaseHTTPRequestHandler):
             "port_fallback": self.app["port"] != PREFERRED_PORT,
             "servidor_uptime_s": now - int(self.app["started"]),
             "links": links,
-            "dns_casa": (self.app["dns_casa"].snapshot()
-                         if self.app.get("dns_casa") else None),
+            "dns_lan": (self.app["dns_lan"].snapshot()
+                         if self.app.get("dns_lan") else None),
         })
 
     def api_samples(self):
@@ -390,18 +390,18 @@ class Handler(BaseHTTPRequestHandler):
         """Para onde cada medicao aponta, para a pagina poder mostrar.
 
         Existe porque "latencia 4 ms" nao quer dizer nada sem saber ate ONDE, e
-        porque o servidor DNS da casa e justamente o que ninguem lembra qual e
+        porque o servidor DNS da LAN e justamente o que ninguem lembra qual e
         na hora do problema.
         """
         import probe          # tardio, igual ao listar_ifaces: evita ciclo de import
-        vigia = self.app.get("dns_casa")
-        dns_casa = vigia.snapshot() if vigia else {}
+        vigia = self.app.get("dns_lan")
+        dns_lan = vigia.snapshot() if vigia else {}
         self._json({
             "sondas": probe.alvos_das_sondas(),
-            "dns_casa": {
-                "servidores": dns_casa.get("servidores", []),
-                "zona": dns_casa.get("zona"),
-                "intervalo_s": probe.SondaDnsCasa.INTERVALO,
+            "dns_lan": {
+                "servidores": dns_lan.get("servidores", []),
+                "zona": dns_lan.get("zona"),
+                "intervalo_s": probe.SondaDnsLan.INTERVALO,
             },
             "dns_do_sistema": probe.dns_do_sistema(),
             "por_link": [{

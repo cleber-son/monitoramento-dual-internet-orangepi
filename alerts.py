@@ -277,8 +277,8 @@ class Alerts:
         self._emit("latencia_normalizada", probe, payload, event_id,
                    ignore_cooldown=True)
 
-    def on_dns_casa(self, ok, servidor, resultado, papel=None):
-        """DNS da casa caiu/voltou.
+    def on_dns_lan(self, ok, servidor, resultado, papel=None):
+        """DNS da LAN caiu/voltou.
 
         Nao passa por um LinkProbe: a falha nao e de um link, e do resolvedor.
         Em 30/08 os dois links estavam UP e mesmo assim ninguem navegava.
@@ -286,10 +286,10 @@ class Alerts:
         agora = int(time.time())
         onde = "%s%s" % (servidor, " — %s" % papel if papel else "")
         if ok:
-            msg = "🟢 DNS da casa (%s) voltou a resolver as %s" % (onde, fmt_hora(agora))
+            msg = "🟢 DNS da LAN (%s) voltou a resolver as %s" % (onde, fmt_hora(agora))
             log.warning(msg)
         else:
-            msg = "🔴 DNS da casa (%s) parou de resolver as %s — %s. Os links " \
+            msg = "🔴 DNS da LAN (%s) parou de resolver as %s — %s. Os links " \
                   "podem estar no ar e ninguem navegar." % (
                       onde, fmt_hora(agora),
                       resultado.get("erro") or "sem resposta")
@@ -297,7 +297,7 @@ class Alerts:
         payload = {
             "source": "netmon",
             "host": socket.gethostname(),
-            "event": "dns_casa_ok" if ok else "dns_casa_falha",
+            "event": "dns_lan_ok" if ok else "dns_lan_falha",
             "link": "DNS",
             "iface": None,
             "estado": "UP" if ok else "DOWN",
@@ -318,7 +318,7 @@ class Alerts:
             },
             "mensagem": msg,
         }
-        self._emit("dns_casa:%s" % servidor, _AlvoDns(), payload, None,
+        self._emit("dns_lan:%s" % servidor, _AlvoDns(), payload, None,
                    ignore_cooldown=ok)
 
     # -- internos ---------------------------------------------------------

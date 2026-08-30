@@ -70,10 +70,10 @@ def broadcaster(app):
                     snap["uptime"] = server_mod.uptime_periodos(p.link_id, now)
                     snap["ultima_queda"] = server_mod.ultima_queda(p.link_id)
                 links.append(snap)
-            vigia = app.get("dns_casa")
+            vigia = app.get("dns_lan")
             app["bus"].publish("status", {"ts": now, "porta": app.get("port"),
                                           "links": links,
-                                          "dns_casa": vigia.snapshot() if vigia else None})
+                                          "dns_lan": vigia.snapshot() if vigia else None})
         except Exception:
             log.exception("falha difundindo status")
         stop.wait(BROADCAST_EVERY)
@@ -223,7 +223,7 @@ def main():
 
     app = {
         "probes": [], "bus": bus, "alerts": alerts, "stop": stop,
-        "started": time.time(), "port": None, "dns_casa": None,
+        "started": time.time(), "port": None, "dns_lan": None,
     }
 
     # Cabo trocado de porta enquanto o servico estava parado: o link continua
@@ -242,8 +242,8 @@ def main():
 
     # vigia do resolvedor da casa; depois das sondas, porque descobre o
     # endereco a partir do link de LAN
-    dns_casa = probe_mod.SondaDnsCasa(app, stop, alerts)
-    app["dns_casa"] = dns_casa
+    dns_lan = probe_mod.SondaDnsLan(app, stop, alerts)
+    app["dns_lan"] = dns_lan
 
     srv = server_mod.build(app)
 
@@ -262,7 +262,7 @@ def main():
     alerts.start()
     for p in probes:
         p.start()
-    dns_casa.start()
+    dns_lan.start()
     threading.Thread(target=broadcaster, args=(app,), name="broadcast",
                      daemon=True).start()
     threading.Thread(target=maintenance, args=(app,), name="manutencao",

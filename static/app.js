@@ -114,26 +114,26 @@ function medir(svg, wPadrao, hPadrao) {
            H: Math.round(r.height) || svg.clientHeight || hPadrao };
 }
 
-/* ------------------------------------------- DNS da casa (o Pi-hole) */
+/* ------------------------------------------- DNS da LAN (o Pi-hole) */
 // Fica no topo, junto do estado da conexão, e não dentro de um card de link:
 // não é métrica de link nenhum. Em 30/08 os três links apareciam verdes com a
 // casa inteira sem resolver nome, porque o que quebrou foi a rota até os
 // upstreams do Pi-hole — caminho que nenhuma sonda de link percorre.
-function renderDnsCasa(d) {
-  const el = $('dns-casa');
+function renderDnsLan(d) {
+  const el = $('dns-lan');
   if (!el) return;
   const lista = (d && d.servidores) || [];
   if (!d || d.ok === null || d.ok === undefined) {
     el.className = 'pill pill-neutro';
-    el.textContent = lista.length ? 'DNS da casa: medindo…' : 'DNS da casa: —';
+    el.textContent = lista.length ? 'DNS da LAN: medindo…' : 'DNS da LAN: —';
   } else if (d.ok) {
     el.className = 'pill pill-on';
-    el.textContent = `DNS da casa: ok${d.ms != null ? ' · ' + nf(d.ms, 0) + ' ms' : ''}`;
+    el.textContent = `DNS da LAN: ok${d.ms != null ? ' · ' + nf(d.ms, 0) + ' ms' : ''}`;
   } else {
     el.className = 'pill pill-off';
     // nomeia QUAL endereço caiu: o aparelho serve DNS em vários, e saber em
     // qual parou é o que diz quem da casa ficou sem navegar
-    el.textContent = `DNS da casa: SEM RESOLVER em ${(d.falhando || []).join(', ')}`;
+    el.textContent = `DNS da LAN: SEM RESOLVER em ${(d.falhando || []).join(', ')}`;
   }
   const linhas = lista.map((s) => {
     const est = s.ok === false ? '✖ ' + (s.erro || 'sem resposta')
@@ -155,11 +155,11 @@ function renderAlvos(d) {
   const resumo = $('alvos-resumo');
   if (!grid || !d) return;
   const s = d.sondas || {};
-  const casa = (d.dns_casa && d.dns_casa.servidores) || [];
-  const principal = casa.find((x) => /DHCP/i.test(x.papel || '')) || casa[0];
+  const lan = (d.dns_lan && d.dns_lan.servidores) || [];
+  const principal = lan.find((x) => /DHCP/i.test(x.papel || '')) || lan[0];
 
   if (resumo) {
-    resumo.textContent = `ping ${(s.ping || [])[0] || '—'} · DNS da casa ${principal ? principal.servidor : '—'}`;
+    resumo.textContent = `ping ${(s.ping || [])[0] || '—'} · DNS da LAN ${principal ? principal.servidor : '—'}`;
   }
 
   const item = (rot, valor, obs) => `<div class="alvo">
@@ -178,14 +178,14 @@ function renderAlvos(d) {
     item('IP externo', s.ip_externo || '—', `a cada ${s.ip_externo_a_cada_s}s`),
   ];
 
-  const linhasDns = casa.map((x) => item(
-    `DNS da casa · ${x.servidor}`,
+  const linhasDns = lan.map((x) => item(
+    `DNS da LAN · ${x.servidor}`,
     x.ok === false ? 'SEM RESOLVER' : x.ok ? `ok · ${nf(x.ms, 0)} ms` : 'medindo…',
     x.papel));
 
   grid.innerHTML = linhas.join('') + linhasDns.join('')
-    + item('Nome consultado no teste do DNS da casa',
-           '(aleatório).' + (d.dns_casa ? d.dns_casa.zona : ''),
+    + item('Nome consultado no teste do DNS da LAN',
+           '(aleatório).' + (d.dns_lan ? d.dns_lan.zona : ''),
            'muda a cada consulta de propósito: um nome fixo viria do cache e esconderia a falha');
 }
 
@@ -1134,7 +1134,7 @@ function conectar() {
     estado.porta = d.porta;
     if (mudou) { preencherFiltrosDeLink(); montarLegenda(); }
     renderCards(d.links);
-    renderDnsCasa(d.dns_casa);
+    renderDnsLan(d.dns_lan);
     atualizarBanner(d.links);
     if (estado.serieAtual) {
       nomesLinks().forEach((n) =>
@@ -1589,7 +1589,7 @@ async function iniciar() {
     preencherFiltrosDeLink();
     montarLegenda();
     renderCards(s.links);
-    renderDnsCasa(s.dns_casa);
+    renderDnsLan(s.dns_lan);
     atualizarBanner(s.links);
     $('rodape-info').textContent =
       `netmon · servidor no ar há ${fmtDurLonga(s.servidor_uptime_s)} · porta ${s.porta}` +
