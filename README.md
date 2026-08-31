@@ -463,6 +463,20 @@ static/       index.html, app.js, style.css
   a **operadora**, não a porta: a GIGA continuou em ~110 Mbps já na USB 3.0, e a
   IMPACTO entregou 211 Mbps na USB 2.0. Antes de trocar hardware, troque o cabo
   de lugar e veja o que o número acompanha.
+- **Conexões em paralelo separam "a linha é lenta" de "o aparelho é lento"**, e
+  não exigem mexer em cabo nenhum. Se o teto for do aparelho, várias conexões
+  somam mais que uma; se for da linha, o total não sai do lugar:
+
+  | | 1 conexão | 4 em paralelo |
+  |---|---|---|
+  | GIGA | 110 Mbps | **119 Mbps** |
+  | IMPACTO | 223 Mbps | **250 Mbps** |
+
+  Paralelizar não destravou a GIGA, e o mesmo aparelho — pelo adaptador USB 2.0,
+  o mais lento dos dois — fez 250 Mbps na IMPACTO no mesmo minuto. O teto é da
+  **linha da GIGA**. Ela é de 1 Gb e já mediu 596–790 Mbps neste mesmo monitor:
+  degradou. Medido com `curl -Z --parallel-max`, somando o que passou de fato
+  pela interface em `/proc/net/dev`, fora do teste de velocidade do netmon.
 - **Perda parcial contra o roteador de casa não é perda de rede.** Ele responde
   ping dirigido a ELE com baixa prioridade: 1,2% em 240 pacotes, sempre um
   pacote isolado, nunca em rajada, com latência firme em 0,32 ms e zero erro de
