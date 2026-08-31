@@ -205,7 +205,12 @@ function montarRecolhiveis() {
       gravarRecolhidos([...atual]);
       // um SVG dentro de seção fechada mede 0 px: ao abrir, o desenho antigo
       // estaria na escala errada e precisa ser refeito
-      if (!agoraRecolhido) setTimeout(redesenhar, 30);
+      if (!agoraRecolhido) {
+        setTimeout(redesenhar, 30);
+        // a lista de placas só é relida quando a seção abre: são vários `ip`
+        // por vez, caros neste aparelho
+        if (titulo === 'Configurações e alertas') carregarIfaces();
+      }
     });
   });
 }
@@ -1649,6 +1654,20 @@ function preencherFiltrosDeLink() {
 }
 
 /* ------------------------------------------------------------ init */
+// Um `$('x')` que devolve null derruba ligarEventos() inteiro, e com ele toda a
+// inicialização — foi o que aconteceu quando um <details> saiu do HTML e o
+// listener dele ficou para trás: a página subiu sem cards, sem gráficos e sem
+// SSE. `liga` transforma isso num aviso no console em vez de uma página morta.
+function liga(id, evento, fn, opcoes) {
+  const el = $(id);
+  if (!el) {
+    console.warn('netmon: elemento #' + id + ' não existe; evento ' + evento + ' ignorado');
+    return null;
+  }
+  el.addEventListener(evento, fn, opcoes);
+  return el;
+}
+
 function ligarEventos() {
   document.querySelectorAll('.btn-per').forEach((b) => {
     b.addEventListener('click', () => {
@@ -1696,10 +1715,6 @@ function ligarEventos() {
     $('c-if-msg').textContent = 'relendo…';
     await carregarIfaces();
     $('c-if-msg').textContent = `${estado.ifaces.length} placa(s) encontradas`;
-  });
-  // a lista de placas só é relida quando o painel abre: são vários `ip` por vez
-  $('config').addEventListener('toggle', () => {
-    if (!secaoRecolhida('Configurações e alertas')) carregarIfaces();
   });
 
   $('f-vel-link').addEventListener('change', carregarVelocidade);
@@ -1794,8 +1809,11 @@ async function iniciar() {
   // antes de tudo: reestrutura as seções em cabeça + corpo. Se rodasse depois
   // de pintar, os gráficos já teriam sido desenhados dentro de seções fechadas,
   // com 0 px de largura.
-  montarRecolhiveis();
-  ligarEventos();
+  // Cada etapa isolada: uma falha ao ligar eventos não pode impedir os dados de
+  // carregarem. Foi assim que a página ficou sem cards, sem gráficos e sem SSE
+  // por causa de um único listener apontando para um elemento que saiu do HTML.
+  try { montarRecolhiveis(); } catch (e) { console.error('recolhíveis:', e); }
+  try { ligarEventos(); } catch (e) { console.error('eventos:', e); }
   await carregarConfig();
   try {
     const s = await pegar('/api/status');
