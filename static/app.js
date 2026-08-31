@@ -114,6 +114,102 @@ function medir(svg, wPadrao, hPadrao) {
            H: Math.round(r.height) || svg.clientHeight || hPadrao };
 }
 
+/* ------------------------------------------------- recolher painéis */
+// Toda seção vira recolhível pelo mesmo mecanismo. Antes algumas eram <details>
+// nativos e outras não, o que dava dois comportamentos diferentes na mesma
+// página — e o <details> não serve para as seções cujo cabeçalho tem campos (o
+// traceroute tem <select> e <input> ali), porque clicar num campo dentro de um
+// <summary> fecha a seção.
+const RECOLHIDOS_PADRAO = [
+  'O que está sendo medido',
+  'NordVPN · Meshnet',
+  'Histórico de quedas e alertas',
+  'Configurações e alertas',
+  'Relatórios e manutenção',
+];
+const CHAVE_RECOLHIDOS = 'netmon.recolhidos';
+
+function lerRecolhidos() {
+  // localStorage pode lançar (janela anônima, dados de site bloqueados): sem ele
+  // a página continua funcionando, só não lembra o que estava fechado
+  try {
+    const cru = localStorage.getItem(CHAVE_RECOLHIDOS);
+    if (cru) return JSON.parse(cru);
+  } catch (e) { /* segue com o padrão */ }
+  return null;
+}
+
+function gravarRecolhidos(lista) {
+  try { localStorage.setItem(CHAVE_RECOLHIDOS, JSON.stringify(lista)); }
+  catch (e) { /* sem persistência, e tudo bem */ }
+}
+
+function estadoRecolhidos() {
+  const salvos = lerRecolhidos();
+  return new Set(Array.isArray(salvos) ? salvos : RECOLHIDOS_PADRAO);
+}
+
+function secaoRecolhida(titulo) {
+  return estadoRecolhidos().has(titulo);
+}
+
+function montarRecolhiveis() {
+  const fechados = estadoRecolhidos();
+  document.querySelectorAll('main > .painel').forEach((sec) => {
+    if (sec.querySelector(':scope > .painel-cabeca')) return;   // já montado
+    const h2 = sec.querySelector('h2');
+    if (!h2) return;
+    const titulo = h2.textContent.trim();
+
+    const corpo = document.createElement('div');
+    corpo.className = 'painel-corpo';
+    while (sec.firstChild) corpo.appendChild(sec.firstChild);
+
+    const cabeca = document.createElement('div');
+    cabeca.className = 'painel-cabeca';
+    cabeca.appendChild(h2);                       // sai do corpo, vai para a cabeça
+
+    // um resumo curto continua visível com a seção fechada
+    const resumo = corpo.querySelector('.resumo-cabeca');
+    if (resumo) cabeca.appendChild(resumo);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'painel-toggle';
+    btn.textContent = '▾';
+    cabeca.appendChild(btn);
+
+    // um .painel-topo que só existia para segurar o título fica vazio depois da
+    // mudança e deixaria uma linha em branco no corpo
+    corpo.querySelectorAll('.painel-topo').forEach((topo) => {
+      if (!topo.textContent.trim() && !topo.querySelector('input, select, button')) {
+        topo.remove();
+      }
+    });
+
+    sec.appendChild(cabeca);
+    sec.appendChild(corpo);
+
+    const aplicar = (recolhido) => {
+      sec.classList.toggle('recolhido', recolhido);
+      btn.setAttribute('aria-expanded', String(!recolhido));
+      btn.setAttribute('aria-label', (recolhido ? 'Abrir ' : 'Recolher ') + titulo);
+    };
+    aplicar(fechados.has(titulo));
+
+    cabeca.addEventListener('click', () => {
+      const agoraRecolhido = !sec.classList.contains('recolhido');
+      aplicar(agoraRecolhido);
+      const atual = estadoRecolhidos();
+      if (agoraRecolhido) atual.add(titulo); else atual.delete(titulo);
+      gravarRecolhidos([...atual]);
+      // um SVG dentro de seção fechada mede 0 px: ao abrir, o desenho antigo
+      // estaria na escala errada e precisa ser refeito
+      if (!agoraRecolhido) setTimeout(redesenhar, 30);
+    });
+  });
+}
+
 /* ------------------------------------------- DNS da LAN (o Pi-hole) */
 // Fica no topo, junto do estado da conexão, e não dentro de um card de link:
 // não é métrica de link nenhum. Em 30/08 os três links apareciam verdes com a
@@ -1603,7 +1699,7 @@ function ligarEventos() {
   });
   // a lista de placas só é relida quando o painel abre: são vários `ip` por vez
   $('config').addEventListener('toggle', () => {
-    if ($('config').open) carregarIfaces();
+    if (!secaoRecolhida('Configurações e alertas')) carregarIfaces();
   });
 
   $('f-vel-link').addEventListener('change', carregarVelocidade);
@@ -1695,6 +1791,10 @@ function relogio() {
 }
 
 async function iniciar() {
+  // antes de tudo: reestrutura as seções em cabeça + corpo. Se rodasse depois
+  // de pintar, os gráficos já teriam sido desenhados dentro de seções fechadas,
+  // com 0 px de largura.
+  montarRecolhiveis();
   ligarEventos();
   await carregarConfig();
   try {
@@ -1714,7 +1814,7 @@ async function iniciar() {
   await Promise.all([carregarGraficos(), carregarResumo(), carregarEventos(),
                      carregarVelocidade(), carregarTrace(), carregarAlvos(), carregarMesh()]);
   conectar();
-  if ($('config').open) carregarIfaces();
+  if (!secaoRecolhida('Configurações e alertas')) carregarIfaces();
   setInterval(relogio, 1000);
   setInterval(carregarEventos, 60000);
   setInterval(carregarAlvos, 60000);

@@ -373,15 +373,13 @@ main {
 }
 /* Cada seção ganha uma barrinha de acento antes do título: dá ritmo à página e
    torna possível achar uma seção rolando, o que antes exigia ler todos os h2. */
-.painel > h2:first-child,
-.painel .painel-topo h2,
-.painel > details > summary h2 {
+/* O h2 pode estar solto no painel, dentro do .painel-topo ou dentro da
+   .painel-cabeca criada pelo recolhimento — o seletor cobre os três. */
+.painel h2 {
   position: relative;
   padding-left: 12px;
 }
-.painel > h2:first-child::before,
-.painel .painel-topo h2::before,
-.painel > details > summary h2::before {
+.painel h2::before {
   content: "";
   position: absolute;
   left: 0; top: .18em; bottom: .18em;
@@ -814,7 +812,9 @@ body { overflow-x: hidden; }
 .card-lan {
   grid-column: 1 / -1;
   border-style: dashed;
-  background: linear-gradient(180deg, rgba(138,111,224,.05), transparent 60%), var(--surface);
+  /* Antes esta regra sobrescrevia o fundo do `.card` com um lilás de 5%, e o
+     ROTEADOR ficava visivelmente mais apagado que as duas internets. Agora só
+     a borda tracejada o diferencia — o tingimento é o mesmo dos outros. */
 }
 .card-lan .card-metricas { max-width: 640px; }
 .ip-externo b { color: var(--ink); }
@@ -954,11 +954,51 @@ main > .painel:nth-of-type(5n+4) { --acento: #c0a3ff; --acento-2: #ff7ad9; }
 main > .painel:nth-of-type(5n+5) { --acento: #ffc531; --acento-2: #ff9d5c; }
 
 /* o título herda um toque da cor da seção, sem perder a legibilidade */
-.painel > h2:first-child,
-.painel .painel-topo h2,
-.painel > details > summary h2 { color: var(--acento); }
+.painel h2 { color: var(--acento); }
 
 /* Quem pediu menos movimento no sistema não recebe nenhum. */
 @media (prefers-reduced-motion: reduce) {
   .bolinha, .b-UP, .b-DOWN, .b-DEGRADED { animation: none !important; }
+}
+
+/* ------------------------------------------------- recolher painéis */
+/* Toda seção recolhe no clique do título. A cabeça fica sempre visível, com o
+   resumo ao lado — assim dá para saber o estado do Meshnet, por exemplo, com a
+   seção fechada. O estado de cada seção fica no localStorage do navegador:
+   é preferência de quem olha, não do aparelho, e cada um tem a sua. */
+.painel-cabeca {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+  margin: -4px -4px 8px;
+  padding: 4px;
+  border-radius: 8px;
+}
+.painel-cabeca:hover { background: rgba(255, 255, 255, .04); }
+.painel-cabeca h2 { flex: none; }
+.painel-cabeca .resumo-cabeca { margin-left: auto; }
+.painel-toggle {
+  margin-left: auto;
+  flex: none;
+  background: transparent;
+  border: 1px solid var(--borda);
+  color: var(--acento);
+  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform .18s ease, background .18s ease;
+}
+.painel-cabeca .resumo-cabeca ~ .painel-toggle { margin-left: 0; }
+.painel-toggle:hover { background: var(--surface-2); }
+.painel.recolhido .painel-toggle { transform: rotate(-90deg); }
+.painel.recolhido .painel-corpo { display: none; }
+.painel.recolhido { padding-bottom: 12px; margin-bottom: 10px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .painel-toggle { transition: none; }
 }

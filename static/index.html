@@ -38,20 +38,6 @@
 <!-- ------------------------------------------------ cards de status -->
 <section class="cards" id="cards" aria-label="Estado atual dos links"></section>
 
-<!-- ------------------------------------------------ o que é medido -->
-<section class="painel painel-fino">
-  <details id="alvos-det">
-    <summary>
-      <h2 class="inline">O que está sendo medido</h2>
-      <span class="alvos-resumo" id="alvos-resumo">—</span>
-    </summary>
-    <p class="painel-sub">Toda latência aqui é até um alvo concreto, e todo teste de DNS
-      é contra um servidor concreto. Sem isso um "4 ms" não quer dizer nada — e na hora
-      do problema ninguém lembra qual é o servidor DNS da LAN.</p>
-    <div class="alvos-grid" id="alvos-grid"></div>
-  </details>
-</section>
-
 <!-- ------------------------------------------------ latência -->
 <section class="painel">
   <div class="painel-topo">
@@ -225,6 +211,16 @@
   </div>
 </section>
 
+<!-- ------------------------------------------------ o que é medido -->
+<section class="painel painel-fino">
+  <h2>O que está sendo medido</h2>
+  <span class="alvos-resumo resumo-cabeca" id="alvos-resumo">—</span>
+    <p class="painel-sub">Toda latência aqui é até um alvo concreto, e todo teste de DNS
+      é contra um servidor concreto. Sem isso um "4 ms" não quer dizer nada — e na hora
+      do problema ninguém lembra qual é o servidor DNS da LAN.</p>
+    <div class="alvos-grid" id="alvos-grid"></div>
+</section>
+
 <!-- ------------------------------------------------ meshnet -->
 <section class="painel">
   <div class="painel-topo">
@@ -235,7 +231,7 @@
         então <b>se uma operadora cair ele volta sozinho pela outra</b>.</p>
     </div>
     <div class="filtros">
-      <span class="pill pill-neutro" id="mesh-pill">Meshnet: —</span>
+      <span class="pill pill-neutro resumo-cabeca" id="mesh-pill">Meshnet: —</span>
       <button class="btn" id="mesh-toggle" type="button" disabled>—</button>
     </div>
   </div>
@@ -254,8 +250,7 @@
 
 <!-- ------------------------------------------------ eventos -->
 <section class="painel">
-  <details id="eventos-det">
-  <summary><h2 class="inline">Histórico de quedas e alertas</h2></summary>
+  <h2>Histórico de quedas e alertas</h2>
   <div class="painel-topo">
     <div>
       <p class="painel-sub">Registro completo, com hora exata da queda, do retorno e a duração.</p>
@@ -287,13 +282,11 @@
     <span id="ev-info" class="muted">—</span>
     <button class="btn" id="ev-next" type="button">Próximos ›</button>
   </div>
-  </details>
 </section>
 
 <!-- ------------------------------------------------ configurações -->
 <section class="painel">
-  <details id="config">
-    <summary><h2 class="inline">Configurações e alertas</h2></summary>
+  <h2>Configurações e alertas</h2>
     <h3 class="config-titulo">Placas de rede</h3>
     <p class="painel-sub">Qual placa cada link usa. Troque aqui quando substituir o
       adaptador USB por outro modelo — vale na hora, sem reiniciar o serviço, e o
@@ -350,13 +343,11 @@
       <button class="btn" id="c-testar" type="button">Testar webhook</button>
       <span id="c-msg" class="muted"></span>
     </div>
-  </details>
 </section>
 
 <!-- ------------------------------------------------ relatórios e manutenção -->
 <section class="painel">
-  <details id="manutencao">
-    <summary><h2 class="inline">Relatórios e manutenção</h2></summary>
+  <h2>Relatórios e manutenção</h2>
 
     <div class="acoes-grid">
 
@@ -414,7 +405,6 @@
 
     </div>
     <p id="m-msg" class="muted"></p>
-  </details>
 </section>
 
 <footer class="rodape">
