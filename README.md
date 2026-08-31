@@ -422,6 +422,18 @@ static/       index.html, app.js, style.css
   para um gateway inalcançável e **derrubaram o DNS da LAN inteira**. Rota
   estática gravada em perfil do NetworkManager sobrevive a reboot e não aparece
   num `nmcli con show` resumido.
+- **O log do Pi-hole engana na hora de investigar**: o conteúdo é gravado em
+  **horário local**, mas os `mtime` dos arquivos dentro do container saem em
+  **UTC**. Misturar os dois faz analisar uma janela três horas fora do
+  incidente — e o log parece provar exatamente o contrário do que aconteceu.
+  Confira sempre com `date` antes de recortar um intervalo.
+- **`tail` largo atravessa o incidente.** Num arquivo de 68 MB, `tail -3000`
+  alcançou o período *anterior* à queda, e as consultas de lá pareciam prova de
+  que o serviço continuava atendendo durante o apagão. O que resolve a dúvida é
+  contar por minuto dentro da janela exata (`awk` no campo da hora), não olhar o
+  fim do arquivo. Foi assim que ficou claro que o roteador da casa passou o
+  apagão inteiro **mudo** — zero consultas — e disparou 1331 de uma vez no
+  minuto em que o endereço voltou.
 - **Um servidor DNS não pode ter IP de DHCP.** O `192.168.18.2` vinha de reserva
   amarrada ao MAC; trocar o adaptador USB mudou o MAC, a reserva não casou, o Pi
   caiu para um IP do pool e a rede ficou apontando para um endereço morto. Hoje o
