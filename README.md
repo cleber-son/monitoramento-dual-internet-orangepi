@@ -98,25 +98,25 @@ relatórios que vão para a operadora.
 
 ### Os números daqui de casa
 
-Última medição automática, das duas internets, no mesmo minuto:
+Última medição das duas internets, no mesmo minuto:
 
 | Link | ↓ download | ↑ upload | ping | jitter |
 |---|---|---|---|---|
-| **GIGA** (principal) | 130,8 Mbps | 106,6 Mbps | 4,14 ms | 0,15 ms |
-| **IMPACTO** (reserva) | 175,8 Mbps | 138,9 Mbps | 3,27 ms | 0,16 ms |
+| **GIGA** (principal) | 111,4 Mbps | 174,1 Mbps | 4,40 ms | 0,13 ms |
+| **IMPACTO** (reserva) | 106,0 Mbps | 180,7 Mbps | 4,48 ms | 0,18 ms |
 
-E a latência contínua das últimas 24 h, das sondas de 2 s:
+E a latência contínua das sondas de 2 s:
 
-| Link | rtt médio | perda média |
-|---|---|---|
-| GIGA | 3,92 ms | 1,85% |
-| IMPACTO | 3,91 ms | 1,23% |
-| ROTEADOR (rede local) | 0,70 ms | 0,14% |
+| Link | rtt médio | jitter | perda |
+|---|---|---|---|
+| GIGA | 4,36 ms | 0,21 ms | 1,21% |
+| IMPACTO | 3,02 ms | 0,18 ms | 0,20% |
+| ROTEADOR (rede local) | 0,37 ms | 0,06 ms | 0% |
 
-A velocidade varia bastante entre medições — já vi a GIGA em 790 Mbps e a
-IMPACTO em 364 — e é exatamente por isso que existe o teste diário automático:
-um número solto não serve de argumento, uma série de medições no mesmo horário
-serve.
+A GIGA é um plano de **1 Gb** e entrega ~120 Mbps: o teste de conexões em
+paralelo, mais abaixo, mostra que o teto é da linha e não deste aparelho. É
+justamente para isso que existe o teste diário automático — um número solto não
+serve de argumento, uma série no mesmo horário serve.
 
 ## "Mas por que não Grafana? Zabbix? Smokeping?"
 
@@ -261,6 +261,23 @@ sairiam menores que a verdade. Cada teste fica marcado como `manual` ou
 estiver desligado às 4h, o teste sai quando ele voltar, e não duas vezes se o
 serviço reiniciar às 4h05. É o histórico que se leva para a operadora — a
 velocidade entregue todo dia, no mesmo horário.
+
+## A página
+
+**Toda seção recolhe no clique do título**, e o estado fica no navegador de quem
+olha, não no aparelho — cada um tem o seu. Vêm fechadas por padrão as que são
+consulta ocasional: NordVPN, "O que está sendo medido", histórico de quedas,
+configurações e manutenção. O resumo continua visível com a seção fechada, então
+dá para ver `Meshnet: ativo` ou `ping 8.8.8.8 · DNS da LAN 192.168.18.2` sem
+abrir nada.
+
+Não dá para fazer isso com `<details>` nativo: as seções de latência e traceroute
+têm campos no cabeçalho (`<select>`, `<input>`, os botões de período), e clicar
+num campo dentro de um `<summary>` fecha a seção. Por isso o JavaScript separa
+cada painel em cabeça e corpo.
+
+Um cuidado que não é óbvio: um `<svg>` dentro de seção fechada mede **0 px**.
+Ao reabrir, o desenho tem que ser refeito, senão aparece na escala errada.
 
 ## Perda de pacotes não é gráfico
 
@@ -430,13 +447,16 @@ static/       index.html, app.js, style.css
 
 ## Detalhes que custaram caro para descobrir
 
-- Os alvos de ping são `9.9.9.9` e `208.67.222.222` **de propósito**. Havia rotas
-  estáticas fixando `1.1.1.1` e `8.8.8.8` numa única placa, o que falseava a
-  medição do outro link. Elas foram removidas em 30/08 — e a remoção teve um
-  motivo maior: depois que uma placa trocou de papel, aquelas rotas apontavam
-  para um gateway inalcançável e **derrubaram o DNS da LAN inteira**. Rota
-  estática gravada em perfil do NetworkManager sobrevive a reboot e não aparece
-  num `nmcli con show` resumido.
+- Os alvos de ping são `8.8.8.8` e `9.9.9.9`, **de donos diferentes de
+  propósito**: o segundo só entra quando o primeiro some por completo, e usar o
+  mesmo dono nos dois faria uma queda da Google parecer queda do link. O
+  `8.8.8.8` já foi evitado aqui, porque havia rotas estáticas fixando esse IP
+  numa única placa — medir a outra operadora por ele daria um número falso.
+  Essas rotas foram removidas, e a remoção teve um motivo maior: depois que uma
+  placa trocou de papel, elas apontavam para um gateway inalcançável e
+  **derrubaram o DNS da LAN inteira**. Rota estática gravada em perfil do
+  NetworkManager sobrevive a reboot e não aparece num `nmcli con show` resumido.
+  Se um dia voltarem, o alvo volta a mentir: `ip route show | grep 8.8.8.8`.
 - **O log do Pi-hole engana na hora de investigar**: o conteúdo é gravado em
   **horário local**, mas os `mtime` dos arquivos dentro do container saem em
   **UTC**. Misturar os dois faz analisar uma janela três horas fora do
