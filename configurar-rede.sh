@@ -62,15 +62,24 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 echo "==> 1/4  tabela de papeis por gateway em $CONF"
-if [ ! -s "$CONF" ]; then          # -s, nao -f: arquivo VAZIO tambem precisa ser refeito
+# -s e nao -f: arquivo VAZIO precisa ser refeito. E o grep garante que uma
+# tabela da versao antiga (sem a coluna de IP de servico) tambem seja refeita.
+if [ ! -s "$CONF" ] || ! grep -q '^[0-9].*/[0-9]' "$CONF"; then
     gravar_atomico "$CONF" 644 <<'EOF'
 # Papel de cada rede, pelo gateway que o DHCP entrega.
-#   <gateway> <metrica|lan>
+#   <gateway> <metrica|lan> [ip-de-servico/prefixo]
+#
 # metrica menor = caminho preferido para a internet.
 # "lan" = rede local: nunca vira rota default e nao entrega DNS ao sistema.
-192.168.18.1    100     # GIGA    - internet principal
-192.168.17.1    700     # IMPACTO - internet reserva
-192.168.200.254 lan     # roteador de casa
+#
+# O terceiro campo e um endereco que este aparelho precisa TER naquela rede,
+# independente da placa em que o cabo estiver. Aqui e o IP do Pi-hole: o
+# roteador da GIGA anuncia 192.168.18.2 como servidor DNS para a rede inteira,
+# entao esse endereco tem que seguir o cabo da GIGA. Deixa-lo preso ao perfil de
+# uma placa foi o que derrubou o DNS da casa quando o adaptador USB mudou.
+192.168.18.1    100  192.168.18.2/24   # GIGA - principal + IP do Pi-hole
+192.168.17.1    700                    # IMPACTO - reserva
+192.168.200.254 lan                    # roteador de casa
 EOF
     echo "    criado"
 else
@@ -116,6 +125,27 @@ fi
 PAPEL=$(awk -v gw="$GW" '$1==gw {print $2; exit}' "$CONF" | tr -d '[:space:]')
 [ -n "${PAPEL:-}" ] || exit 0
 
+# --- endereco de servico: segue o cabo, nunca a placa ----------------------
+# Terceiro campo da linha deste gateway. Se existir, esta placa PRECISA ter esse
+# endereco, e nenhuma outra pode te-lo -- duas placas com o mesmo IP em redes
+# diferentes quebraria o roteamento de forma silenciosa.
+SERV=$(awk -v gw="$GW" '$1==gw && $3 ~ /\// {print $3; exit}' "$CONF")
+if [ -n "${SERV:-}" ]; then
+    SERV_IP=${SERV%%/*}
+    for OUTRA in $(ls /sys/class/net); do
+        [ "$OUTRA" = "$IFACE" ] && continue
+        if ip -4 -o addr show dev "$OUTRA" 2>/dev/null | grep -q " $SERV_IP/"; then
+            ip addr del "$SERV" dev "$OUTRA" 2>/dev/null || true
+            log "$OUTRA: $SERV removido (o cabo daquela rede mudou de placa)"
+        fi
+    done
+    if ! ip -4 -o addr show dev "$IFACE" | grep -q " $SERV_IP/"; then
+        ip addr add "$SERV" dev "$IFACE" 2>/dev/null \
+            && log "$IFACE (gw $GW): $SERV adicionado" \
+            || log "$IFACE: NAO consegui adicionar $SERV"
+    fi
+fi
+
 UUID=$(nmcli -g GENERAL.CON-UUID device show "$IFACE" 2>/dev/null | head -1)
 
 if [ "$PAPEL" = "lan" ]; then
@@ -142,6 +172,25 @@ log "$IFACE (gw $GW): rota default com metrica $PAPEL"
 exit 0
 EOF
 echo "    instalado ($(wc -c < "$DISPATCHER") bytes)"
+
+echo "==> 2.5/4  tirando os IPs de servico dos perfis do NetworkManager"
+# Quem manda no endereco de servico passa a ser o dispatcher, pelo gateway. Se
+# ele continuasse gravado no perfil de uma placa, o NetworkManager o aplicaria
+# na placa errada assim que o cabo mudasse de porta -- e o endereco apareceria
+# numa rede onde ele nao existe, enquanto a rede certa ficaria sem ele.
+awk '$3 ~ /\// {print $3}' "$CONF" | while read -r SERV; do
+    [ -n "$SERV" ] || continue
+    nmcli -t -f NAME,TYPE connection show | awk -F: '$2=="802-3-ethernet"{print $1}' \
+    | while read -r PERFIL; do
+        ATUAIS=$(nmcli -g ipv4.addresses connection show "$PERFIL" 2>/dev/null || true)
+        case ",$ATUAIS," in
+            *"$SERV"*)
+                nmcli connection modify "$PERFIL" -ipv4.addresses "$SERV" 2>/dev/null \
+                    && echo "    removido $SERV do perfil \"$PERFIL\"" ;;
+        esac
+    done
+done
+echo "    o dispatcher passa a aplica-los pelo gateway"
 
 echo "==> 3/4  IP fixo da rede local em $LAN_IFACE ($LAN_IP/$LAN_MASCARA)"
 UUID_LAN=$(nmcli -g GENERAL.CON-UUID device show "$LAN_IFACE" 2>/dev/null | head -1 || true)

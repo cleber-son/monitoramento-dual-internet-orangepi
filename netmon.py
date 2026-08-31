@@ -192,9 +192,25 @@ def reconciliar_ao_vivo(app):
     sistema, ficou sem IP ou perdeu o gateway. Enquanto tudo estiver medindo,
     nao mexe -- reapontar um link saudavel seria criar um buraco sem motivo.
     """
-    suspeitos = [p for p in app["probes"]
-                 if not p.iface_up or not p.ip
-                 or not os.path.exists("/sys/class/net/" + p.iface)]
+    suspeitos = []
+    for p in app["probes"]:
+        if (not p.iface_up or not p.ip
+                or not os.path.exists("/sys/class/net/" + p.iface)):
+            suspeitos.append(p)
+            continue
+        # Placa saudavel tambem pode estar no link errado: numa troca CRUZADA de
+        # cabos as duas seguem no ar, com IP e com gateway -- nada parece
+        # suspeito, e os rotulos ficam invertidos em silencio, atribuindo as
+        # medicoes a operadora errada. O sinal certo e o gateway: se a placa
+        # deste link passou a ver um gateway diferente do que este link conhece,
+        # o cabo mudou de porta.
+        if p.kind == "lan":
+            continue
+        esperado = probe_mod.gw_conhecido(p.name_link)
+        if esperado and p.gateway and p.gateway != esperado:
+            log.warning("%s: a placa %s ve o gateway %s, mas este link e do %s",
+                        p.name_link, p.iface, p.gateway, esperado)
+            suspeitos.append(p)
     if not suspeitos:
         return
     achados = probe_mod.detectar_por_gateway(db.list_links())

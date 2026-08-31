@@ -327,7 +327,22 @@ sudo /home/orangepi/netmon/configurar-rede.sh
 O script instala um *dispatcher* do NetworkManager que decide o papel de cada
 placa pelo **gateway** que o DHCP entrega, não pelo nome da interface. Depois
 disso, trocar o cabo de porta não exige configuração nenhuma: a rota padrão
-continua na operadora certa sozinha. Ele grava os arquivos de forma atômica e
+continua na operadora certa sozinha.
+
+A tabela `/etc/netmon-rede.conf` aceita um terceiro campo — um **endereço de
+serviço** que este aparelho precisa ter naquela rede, seja qual for a placa:
+
+```
+192.168.18.1    100  192.168.18.2/24   # GIGA - principal + IP do Pi-hole
+192.168.17.1    700                    # IMPACTO - reserva
+192.168.200.254 lan                    # roteador de casa
+```
+
+É o IP do Pi-hole. O roteador da GIGA anuncia `192.168.18.2` como servidor DNS
+para a rede inteira, então esse endereço tem que **seguir o cabo da GIGA**. O
+dispatcher o adiciona na placa que estiver naquele gateway e o remove de
+qualquer outra — deixá-lo preso ao perfil de uma placa foi o que derrubou o DNS
+da casa nas duas vezes em que o cabo mudou de porta. Ele grava os arquivos de forma atômica e
 confere o tamanho no fim — um dispatcher de zero byte já passou meses sem
 aplicar métrica nenhuma, sem dar erro.
 
@@ -434,6 +449,25 @@ static/       index.html, app.js, style.css
   fim do arquivo. Foi assim que ficou claro que o roteador da casa passou o
   apagão inteiro **mudo** — zero consultas — e disparou 1331 de uma vez no
   minuto em que o endereço voltou.
+- **Uma troca CRUZADA de cabos não dispara nenhum alarme.** A reconciliação só
+  agia quando uma placa parecia doente — sem IP, sem gateway, sumida do sistema.
+  Trocando os cabos de duas placas entre si, as duas continuam saudáveis: nada
+  parece errado e os rótulos ficam invertidos em silêncio, atribuindo as
+  medições à operadora errada. Pior, a memória de gateway era reaprendida a
+  partir da placa, então em dois minutos cada link gravava por cima a identidade
+  do vizinho e destruía justamente o dado que desfaria o engano. Agora o
+  gateway é tratado como **identidade do link**: nunca é roubado de outro link,
+  e divergir do esperado é sinal de que o cabo mudou de porta.
+- **O adaptador USB não era o gargalo de velocidade.** A GIGA estava numa porta
+  USB 2.0 e parecia limitada por isso. Invertendo os cabos, os números seguiram
+  a **operadora**, não a porta: a GIGA continuou em ~110 Mbps já na USB 3.0, e a
+  IMPACTO entregou 211 Mbps na USB 2.0. Antes de trocar hardware, troque o cabo
+  de lugar e veja o que o número acompanha.
+- **Perda parcial contra o roteador de casa não é perda de rede.** Ele responde
+  ping dirigido a ELE com baixa prioridade: 1,2% em 240 pacotes, sempre um
+  pacote isolado, nunca em rajada, com latência firme em 0,32 ms e zero erro de
+  RX/TX na placa. O tráfego que ele *encaminha* passa intacto. No link de LAN só
+  100% conta como perda — abaixo disso é política do roteador, não problema.
 - **Um servidor DNS não pode ter IP de DHCP.** O `192.168.18.2` vinha de reserva
   amarrada ao MAC; trocar o adaptador USB mudou o MAC, a reserva não casou, o Pi
   caiu para um IP do pool e a rede ficou apontando para um endereço morto. Hoje o

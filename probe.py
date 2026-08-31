@@ -100,10 +100,41 @@ def gw_conhecido(nome):
     return GW_SEMENTE.get(nome)
 
 
+def link_do_gateway(gw):
+    """Qual link ja reivindica este gateway, se algum."""
+    if not gw:
+        return None
+    try:
+        for l in db.list_links():
+            if l.get("kind") != "lan" and gw_conhecido(l["name"]) == gw:
+                return l["name"]
+    except Exception:
+        pass
+    return None
+
+
 def lembrar_gw(nome, gw):
-    if gw and gw_conhecido(nome) != gw:
-        db.set_meta("gw_conhecido:%s" % nome, gw)
-        log.info("%s: gateway conhecido agora e %s", nome, gw)
+    """Aprende o gateway do link -- mas nunca roubando o de outro link.
+
+    O gateway e a IDENTIDADE do link: e o unico dado que nao muda quando o cabo
+    troca de porta. Antes esta funcao reaprendia cego, a partir da placa. Numa
+    troca CRUZADA de cabos entre duas placas isso era fatal: as duas continuavam
+    saudaveis, ninguem reapontava nada, e cada sonda gravava por cima a
+    identidade do vizinho -- em dois minutos o painel passou a chamar de GIGA a
+    rede da IMPACTO, com a memoria que serviria para desfazer o engano ja
+    destruida. Se o gateway visto pertence a outro link, o que mudou foi o cabo,
+    e quem resolve isso e a reconciliacao, nao esta funcao.
+    """
+    if not gw or gw_conhecido(nome) == gw:
+        return
+    dono = link_do_gateway(gw)
+    if dono and dono != nome:
+        log.warning("%s esta vendo o gateway %s, que e do %s: parece troca de "
+                    "cabo entre placas -- identidade preservada",
+                    nome, gw, dono)
+        return
+    db.set_meta("gw_conhecido:%s" % nome, gw)
+    log.info("%s: gateway conhecido agora e %s", nome, gw)
 
 
 def detectar_por_gateway(links):
@@ -870,6 +901,16 @@ class LinkProbe(threading.Thread):
             res = ping(self.iface, alvo) if alvo else {
                 "loss": 100.0, "rtt_min": None, "rtt_avg": None, "rtt_max": None,
                 "jitter": None, "err": "no_link"}
+            # Perda PARCIAL contra o roteador de casa nao e perda de rede: o
+            # roteador responde ping dirigido a ELE com baixa prioridade, e
+            # descarta alguns por politica propria. Medido aqui: 1,2% em 240
+            # pacotes, sempre um pacote isolado, nunca em rajada, com a latencia
+            # firme em 0,32 ms, a placa em 1 Gbps full duplex e zero erro de
+            # RX/TX. Contabilizar isso enchia o painel de "perda no ROTEADOR"
+            # que nao existe -- e o trafego que ele ENCAMINHA passa intacto.
+            # So 100% conta: ai o roteador sumiu de verdade.
+            if 0.0 < res["loss"] < 100.0:
+                res = dict(res, loss=0.0, loss_bruta=res["loss"])
             alt = res
             no_link = res["err"] == "no_link" or not self.iface_up
             gw_ok = res["loss"] < 100.0
