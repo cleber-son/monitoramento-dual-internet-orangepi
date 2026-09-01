@@ -33,7 +33,9 @@ const CAUSA = {
 };
 
 const estado = {
-  span: 86400,
+  periodo: 'vivo',
+  span: 120,
+  inicioDados: null,
   links: [],
   eventos: [],
   offset: 0,
@@ -51,8 +53,42 @@ const estado = {
   trace: {},
   ifaces: [],
   cfgLinks: [],
+  scan: { redes: [], rede: null, ultimo: null, rodando: null, conhecidos: {} },
   timers: {},
 };
+
+/* ------------------------------------------------------------ período
+   Um seletor só, no alto da página, mandando em todas as seções que falam de
+   tempo: latência, perda, estatísticas, linha do tempo e histórico de quedas.
+   Antes ele vivia dentro do painel de latência e parecia mandar só ali. */
+const PERIODOS = [
+  { id: 'vivo', rot: '● Ao vivo', curto: 'ao vivo', span: 120, vivo: true },
+  { id: '1m',   rot: '1 min',     curto: '1 min',   span: 60 },
+  { id: '10m',  rot: '10 min',    curto: '10 min',  span: 600 },
+  { id: '30m',  rot: '30 min',    curto: '30 min',  span: 1800 },
+  { id: '1h',   rot: '1 h',       curto: '1 hora',  span: 3600 },
+  { id: '2h',   rot: '2 h',       curto: '2 horas', span: 7200 },
+  { id: '24h',  rot: '24 h',      curto: '24 horas', span: 86400 },
+  { id: '2d',   rot: '2 dias',    curto: '2 dias',  span: 172800 },
+  { id: '7d',   rot: '7 dias',    curto: '7 dias',  span: 604800 },
+  { id: '30d',  rot: '30 dias',   curto: '30 dias', span: 2592000 },
+  { id: 'all',  rot: 'Tudo',      curto: 'tudo',    span: null },
+];
+const CHAVE_PERIODO = 'netmon.periodo';
+
+function periodoAtual() {
+  return PERIODOS.find((p) => p.id === estado.periodo) || PERIODOS[0];
+}
+
+/* A janela em epoch. "Tudo" começa na amostra mais antiga que o servidor ainda
+   guarda (/api/status diz qual é); enquanto ele não responder, 30 dias servem
+   de palpite — melhor um gráfico curto do que um gráfico vazio. */
+function janela() {
+  const t1 = Math.floor(Date.now() / 1000);
+  const p = periodoAtual();
+  const t0 = p.span ? t1 - p.span : (estado.inicioDados || t1 - 2592000);
+  return { t0, t1, span: Math.max(30, t1 - t0), vivo: !!p.vivo };
+}
 
 /* Períodos curtos (≤ 5 min) pedem outra cadência: o gráfico se atualiza a cada
    ciclo de sondagem, senão a janela de 30 s ficaria parada por um minuto. */
@@ -910,8 +946,7 @@ function redesenhar() {
 }
 
 async function carregarGraficos() {
-  const t1 = Math.floor(Date.now() / 1000);
-  const t0 = t1 - estado.span;
+  const { t0, t1 } = janela();
   const nomes = nomesLinks();
   try {
     const respostas = await Promise.all(
@@ -1013,7 +1048,7 @@ function celulaResumo(def, nome, valor, vals, valsComp) {
 }
 
 async function carregarResumo() {
-  const t1 = Math.floor(Date.now() / 1000), t0 = t1 - estado.span;
+  const { t0, t1 } = janela();
   const nomes = nomesLinks();
   const internet = linksDeInternet();
   try {
@@ -1042,7 +1077,104 @@ async function carregarResumo() {
     });
     $('resumo-sub').textContent =
       `De ${fmtDataHora(t0)} até ${fmtDataHora(t1)} · uptime calculado sobre o tempo efetivamente monitorado.`;
+    renderQuedasPeriodo(r);
   } catch (e) { console.error(e); }
+}
+
+
+/* ------------------------------------------- destaque das quedas do período
+   A pergunta que o usuário faz quando escolhe um período é sempre a mesma:
+   "caiu? quantas vezes? quanto tempo?". Isso estava diluído no meio de uma
+   tabela de 13 métricas — aqui vira a primeira coisa que se lê, em segundos
+   cheios (é assim que a operadora conta) e com a duração humana ao lado. */
+function cartaoQueda(nome, r) {
+  const link = estado.links.find((l) => l.name === nome);
+  const lan = ehLan(nome);
+  const caido = link && (link.state === 'DOWN' || link.state === 'NO_LINK');
+  const agora = Math.floor(Date.now() / 1000);
+  const cor = corLink(nome);
+  const cab = `<div class="qd-topo"><span class="ponto-link" style="background:${cor}"></span>
+      <b style="color:${cor}">${nome}</b>${lan ? '<span class="tag tag-lan">LAN</span>' : ''}</div>`;
+
+  if (!r || !r.amostras) {
+    return `<div class="qd qd-vazio">${cab}
+      <p class="qd-frase">sem medição neste período</p></div>`;
+  }
+  const seg = Math.round(r.downtime_s || 0);
+  const n = r.quedas || 0;
+  const houve = seg > 0 || n > 0;
+  const agoraTxt = caido
+    ? `<p class="qd-agora">🔴 fora do ar AGORA há ${fmtDurLonga(agora - (link.evento_aberto ? link.evento_aberto.started_at : link.state_since))}</p>`
+    : '';
+  if (!houve) {
+    return `<div class="qd qd-ok">${cab}
+      <p class="qd-frase">✅ nenhuma queda no período</p>
+      <div class="qd-rodape"><span>uptime <b>${r.uptime_pct == null ? '—' : nf(r.uptime_pct, 3) + '%'}</b></span>
+        ${r.degradacoes ? `<span>${r.degradacoes} período(s) de latência alta</span>` : ''}</div>
+      ${agoraTxt}</div>`;
+  }
+  return `<div class="qd qd-caiu">${cab}
+    <div class="qd-numeros">
+      <div class="qd-num"><b>${nf(seg, 0)}</b><span>segundos fora do ar</span>
+        ${seg >= 60 ? `<small>${fmtDurLonga(seg)}</small>` : ''}</div>
+      <div class="qd-num"><b>${nf(n, 0)}</b><span>${n === 1 ? 'queda' : 'quedas'} no período</span>
+        ${r.maior_queda_s ? `<small>maior: ${fmtDur(r.maior_queda_s)}</small>` : ''}</div>
+    </div>
+    <div class="qd-rodape"><span>uptime <b>${r.uptime_pct == null ? '—' : nf(r.uptime_pct, 3) + '%'}</b></span>
+      ${r.degradacoes ? `<span>${r.degradacoes} período(s) de latência alta</span>` : ''}</div>
+    ${agoraTxt}</div>`;
+}
+
+function renderQuedasPeriodo(resumo) {
+  const box = $('quedas-destaque');
+  if (!box) return;
+  // os números vêm do /api/summary, que já deixa de fora as quedas causadas
+  // pelo próprio teste de velocidade e pela troca de placa: em nenhuma das duas
+  // a operadora tem culpa
+  const links = resumo && resumo.links ? resumo.links : {};
+  box.innerHTML = nomesLinks().map((n) => cartaoQueda(n, links[n])).join('');
+}
+
+/* Rótulo da janela em texto, repetido no painel de latência: quem rola a
+   página até um gráfico precisa saber de que pedaço de tempo ele fala. */
+function renderPeriodo() {
+  const p = periodoAtual();
+  const { t0, t1 } = janela();
+  document.querySelectorAll('.btn-per').forEach((b) =>
+    b.classList.toggle('ativo', b.dataset.per === p.id));
+  const pill = $('periodo-pill');
+  if (pill) {
+    pill.textContent = p.curto;
+    pill.className = 'pill resumo-cabeca ' + (p.vivo ? 'pill-on' : 'pill-neutro');
+  }
+  const janelaTxt = p.vivo
+    ? `últimos ${p.span} segundos, redesenhando a cada sondagem (2 s)`
+    : (p.span
+        ? `de ${fmtDataHora(t0)} até agora`
+        : (estado.inicioDados
+            ? `desde o começo da coleta, ${fmtDataHora(t0)} (${fmtDurLonga(t1 - t0)} de histórico)`
+            : 'todo o histórico disponível'));
+  const alvo = $('periodo-janela');
+  if (alvo) alvo.textContent = janelaTxt;
+  const eco = $('eco-latencia');
+  if (eco) eco.textContent = p.curto;
+  const evp = $('ev-periodo');
+  if (evp) evp.textContent = p.vivo ? 'ao vivo (últimos 2 minutos)' : p.curto;
+}
+
+function escolherPeriodo(id, salvar = true) {
+  if (!PERIODOS.some((p) => p.id === id)) return;
+  estado.periodo = id;
+  estado.span = janela().span;
+  if (salvar) {
+    try { localStorage.setItem(CHAVE_PERIODO, id); } catch (e) { /* sem persistência */ }
+  }
+  renderPeriodo();
+  agendarAtualizacoes();
+  estado.offset = 0;
+  carregarGraficos();
+  carregarResumo();
+  carregarEventos();
 }
 
 /* ------------------------------------------------------------ velocidade */
@@ -1207,7 +1339,9 @@ async function testarVelocidade(nome) {
 
 async function carregarEventos() {
   const link = $('f-link').value, tipo = $('f-tipo').value;
-  const q = new URLSearchParams({ limit: '25', offset: String(estado.offset) });
+  const { t0, t1 } = janela();
+  const q = new URLSearchParams({ limit: '25', offset: String(estado.offset),
+                                  from: String(t0), to: String(t1) });
   if (link) q.set('link', link);
   if (tipo) q.set('tipo', tipo);
   try {
@@ -1216,7 +1350,9 @@ async function carregarEventos() {
     const tb = $('tab-eventos').querySelector('tbody');
     limpar(tb);
     if (!r.events.length) {
-      tb.innerHTML = '<tr><td colspan="6" class="muted vazio">Nenhum evento registrado — ótimo sinal.</td></tr>';
+      // a lista segue o período do topo: "nada aqui" pode ser um minuto calmo,
+      // e não a ausência de quedas na vida do link
+      tb.innerHTML = `<tr><td colspan="6" class="muted vazio">Nenhuma queda ou alerta em ${periodoAtual().curto} — ótimo sinal.</td></tr>`;
     }
     // data-rot vira o rótulo das linhas empilhadas no celular (ver style.css)
     r.events.forEach((e) => {
@@ -1385,6 +1521,24 @@ function conectar() {
     // só pinta se o usuário ainda está olhando aquele link
     const sel = $('tr-link');
     if (!sel || !sel.value || sel.value === d.link) renderTrace(d);
+  });
+
+  es.addEventListener('varredura', (ev) => {
+    const d = JSON.parse(ev.data);
+    if (d.fase === 'fim' || d.fase === 'erro') {
+      estado.scan.rodando = null;
+      // no erro o resultado anterior continua na tela: apagar a tabela porque
+      // uma varredura falhou seria perder o que já se sabia da rede
+      if (d.fase === 'fim') estado.scan.ultimo = d;
+      renderScan();
+      if (d.fase === 'erro') {
+        $('sc-msg').textContent = '❌ ' + (d.erro || 'a varredura falhou');
+        $('sc-msg').style.color = '#ffb3b3';
+      }
+      return;
+    }
+    estado.scan.rodando = d;
+    renderScan();
   });
 
   es.addEventListener('alerta', (ev) => {
@@ -1653,6 +1807,168 @@ function preencherFiltrosDeLink() {
   if (fv) fv.innerHTML = '<option value="">Todos</option>' + linksDeInternet().map(op).join('');
 }
 
+/* ------------------------------------------------------ varredura da rede
+   O painel sabia tudo sobre os dois canos de internet e nada sobre a casa.
+   Esta seção mostra o outro lado: quem está ligado aqui dentro.
+
+   Duas coisas moldam o que aparece na tabela:
+     · aparelho que não responde ao ping ainda aparece, porque para existir na
+       rede ele precisa responder ao ARP — a maioria dos celulares está nesse
+       caso, com firewall ligado;
+     · cabo ou Wi-Fi é PALPITE pela assinatura da latência. Não existe como
+       perguntar isso a um aparelho pela rede, e a página não finge que existe.
+*/
+const CONEXAO = {
+  cabo: { chip: '🔌 cabo', cls: 'c-cabo' },
+  wifi: { chip: '📶 Wi-Fi', cls: 'c-wifi' },
+  indefinida: { chip: '? indefinida', cls: 'c-indefinida' },
+  desconhecida: { chip: '— sem medida', cls: 'c-desconhecida' },
+};
+
+function linhaScan(h, modoPortas) {
+  const con = CONEXAO[h.conexao] || CONEXAO.desconhecida;
+  const nome = h.apelido || h.nome || h.tipo || '—';
+  const marcas = [];
+  if (h.eu) marcas.push('<span class="tag tag-eu">este aparelho</span>');
+  if (h.gateway) marcas.push('<span class="tag tag-gw">roteador</span>');
+  if (h.novo) marcas.push('<span class="tag tag-novo">novo na rede</span>');
+  if (h.mac_aleatorio && !h.eu) {
+    marcas.push('<span class="tag tag-rand" title="MAC administrado localmente: '
+      + 'o aparelho sorteia um endereço por rede, então o fabricante não pode ser '
+      + 'identificado. É o padrão de celulares modernos.">MAC aleatório</span>');
+  }
+  const portas = (h.portas || []).length
+    ? h.portas.map((p) => `<span class="porta" title="${escTxt(p.servico || '')}">${p.porta}${
+        p.servico ? ` <small>${escTxt(p.servico)}</small>` : ''}</span>`).join('')
+    : (modoPortas === 'nenhuma'
+        ? '<span class="muted">não olhadas</span>'
+        : '<span class="muted">nenhuma aberta entre as olhadas</span>');
+  const lat = h.rtt_ms == null ? '<span class="muted">—</span>'
+    : `${nf(h.rtt_ms, 2)} ms${h.jitter_ms == null ? '' : ` <small class="muted">±${nf(h.jitter_ms, 2)}</small>`}`;
+  return `<tr class="${h.eu ? 'linha-eu' : ''}${h.novo ? ' linha-nova' : ''}">
+    <td data-rot="Aparelho"><button class="sc-nome" type="button" data-mac="${escTxt(h.mac || '')}"
+          title="clique para dar um apelido a este aparelho">${escTxt(nome)}</button>
+      ${h.apelido && h.tipo ? `<small class="muted">${escTxt(h.tipo)}</small>` : ''}
+      ${marcas.join('')}</td>
+    <td data-rot="IP"><code>${escTxt(h.ip)}</code></td>
+    <td data-rot="MAC"><code class="mac">${escTxt(h.mac || '—')}</code></td>
+    <td data-rot="Fabricante">${escTxt(h.vendor || '—')}</td>
+    <td data-rot="Conexão"><span class="chip-con ${con.cls}" title="${escTxt(h.conexao_motivo || '')}">${con.chip}</span></td>
+    <td data-rot="Latência">${lat}</td>
+    <td data-rot="Portas abertas" class="cel-portas">${portas}</td>
+    <td data-rot="Conhecido desde">${h.primeiro_visto ? fmtDataHora(h.primeiro_visto) : '—'}</td>
+  </tr>`;
+}
+
+function renderScan() {
+  const tb = $('tab-scan') && $('tab-scan').querySelector('tbody');
+  if (!tb) return;
+  const r = estado.scan.rodando || estado.scan.ultimo;
+  const hosts = (r && r.hosts) || [];
+  tb.innerHTML = hosts.length
+    ? hosts.map((h) => linhaScan(h, r.modo_portas)).join('')
+    : '<tr><td colspan="8" class="muted vazio">Nenhuma varredura ainda — escolha a rede e clique em Varrer.</td></tr>';
+
+  const msg = $('sc-msg');
+  if (msg && r) {
+    if (r.fase === 'erro') {
+      msg.innerHTML = `❌ ${escTxt(r.erro || 'falhou')}`;
+      msg.style.color = '#ffb3b3';
+    } else if (r.fase === 'fim' || !estado.scan.rodando) {
+      const wifi = hosts.filter((h) => h.conexao === 'wifi').length;
+      const cabo = hosts.filter((h) => h.conexao === 'cabo').length;
+      msg.innerHTML = `${hosts.length} aparelho(s) em <b>${escTxt(r.rede ? r.rede.cidr : '')}</b>`
+        + ` · ${cabo} por cabo, ${wifi} por Wi-Fi`
+        + ` · varredura de ${fmtDataHora(r.ts)}${r.duracao_s ? ` (levou ${r.duracao_s}s)` : ''}`;
+      msg.style.color = '';
+    }
+  }
+
+  const prog = $('sc-progresso');
+  const rodando = estado.scan.rodando;
+  if (prog) {
+    prog.classList.toggle('oculto', !rodando);
+    if (rodando) {
+      const p = rodando.progresso || {};
+      const pct = p.total ? Math.min(100, Math.round((p.feito / p.total) * 100)) : 5;
+      $('sc-barra-fill').style.width = pct + '%';
+      $('sc-etapa').textContent = `${p.etapa || rodando.fase} — ${p.feito || 0}/${p.total || '?'}`;
+    }
+  }
+  const btn = $('sc-rodar');
+  if (btn) {
+    btn.disabled = !!rodando;
+    btn.textContent = rodando ? 'varrendo…' : 'Varrer a rede';
+  }
+}
+
+function renderRedes() {
+  const sel = $('sc-rede');
+  if (!sel) return;
+  const redes = estado.scan.redes || [];
+  sel.innerHTML = redes.map((r) =>
+    `<option value="${escTxt(r.id)}"${r.id === estado.scan.rede ? ' selected' : ''}>${escTxt(r.rotulo)}</option>`
+  ).join('') || '<option value="">nenhuma rede local encontrada</option>';
+}
+
+async function carregarScan(rede) {
+  try {
+    const q = rede ? '?rede=' + encodeURIComponent(rede) : '';
+    const r = await pegar('/api/scan' + q);
+    estado.scan.redes = r.redes || [];
+    estado.scan.rede = r.rede || (r.redes && r.redes[0] ? r.redes[0].id : null);
+    estado.scan.ultimo = r.ultimo || null;
+    estado.scan.rodando = r.rodando || null;
+    renderRedes();
+    renderScan();
+  } catch (e) { console.error('varredura', e); }
+}
+
+async function rodarScan() {
+  const msg = $('sc-msg');
+  msg.textContent = 'iniciando a varredura…';
+  msg.style.color = '';
+  try {
+    const r = await fetch('/api/scan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rede: $('sc-rede').value,
+                             portas: $('sc-portas').value }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.erro || 'erro');
+    estado.scan.rodando = { fase: 'descobrindo', hosts: [], progresso: {} };
+    renderScan();
+  } catch (e) {
+    msg.textContent = '❌ ' + e.message;
+    msg.style.color = '#ffb3b3';
+  }
+}
+
+/* O apelido é o único jeito honesto de saber que aquele MAC é "a TV da sala":
+   nesta rede não há PTR, NetBIOS nem mDNS respondendo. Fica guardado pelo MAC,
+   então sobrevive a troca de IP. */
+async function apelidarAparelho(mac) {
+  if (!mac) return;
+  const r = estado.scan.rodando || estado.scan.ultimo;
+  const h = ((r && r.hosts) || []).find((x) => x.mac === mac);
+  const atual = (h && h.apelido) || '';
+  const nome = window.prompt('Nome deste aparelho (deixe vazio para tirar o apelido):', atual);
+  if (nome === null) return;
+  try {
+    const resp = await fetch('/api/scan/nome', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mac, nome }),
+    });
+    const j = await resp.json();
+    if (!resp.ok) throw new Error(j.erro || 'erro');
+    if (h) h.apelido = j.nome;
+    renderScan();
+  } catch (e) {
+    $('sc-msg').textContent = '❌ ' + e.message;
+    $('sc-msg').style.color = '#ffb3b3';
+  }
+}
+
 /* ------------------------------------------------------------ init */
 // Um `$('x')` que devolve null derruba ligarEventos() inteiro, e com ele toda a
 // inicialização — foi o que aconteceu quando um <details> saiu do HTML e o
@@ -1670,14 +1986,7 @@ function liga(id, evento, fn, opcoes) {
 
 function ligarEventos() {
   document.querySelectorAll('.btn-per').forEach((b) => {
-    b.addEventListener('click', () => {
-      document.querySelectorAll('.btn-per').forEach((x) => x.classList.remove('ativo'));
-      b.classList.add('ativo');
-      estado.span = parseInt(b.dataset.span, 10);
-      agendarAtualizacoes();
-      carregarGraficos();
-      carregarResumo();
-    });
+    b.addEventListener('click', () => escolherPeriodo(b.dataset.per));
   });
 
   $('vel-grid').addEventListener('click', (ev) => {
@@ -1756,6 +2065,13 @@ function ligarEventos() {
   });
   $('btn-reset-ok').addEventListener('click', resetar);
 
+  liga('sc-rodar', 'click', rodarScan);
+  liga('sc-rede', 'change', () => carregarScan($('sc-rede').value));
+  liga('tab-scan', 'click', (ev) => {
+    const b = ev.target.closest('.sc-nome');
+    if (b) apelidarAparelho(b.dataset.mac);
+  });
+
   $('mesh-toggle').addEventListener('click', alternarMesh);
   $('tr-rodar').addEventListener('click', rodarTrace);
   $('tr-destino').addEventListener('keydown', (ev) => {
@@ -1795,9 +2111,14 @@ function ligarEventos() {
 function agendarAtualizacoes() {
   clearInterval(estado.timers.graficos);
   clearInterval(estado.timers.resumo);
-  const curto = estado.span <= SPAN_CURTO;
-  estado.timers.graficos = setInterval(carregarGraficos, curto ? 2000 : 60000);
-  estado.timers.resumo = setInterval(carregarResumo, curto ? 5000 : 60000);
+  const span = janela().span;
+  // três cadências: ao vivo acompanha a sondagem; janelas de até uma hora
+  // envelhecem rápido o bastante para valer 10 s; o resto é história e não
+  // muda de figura em um minuto
+  const graf = span <= SPAN_CURTO ? 2000 : span <= 3600 ? 10000 : 60000;
+  const res = span <= SPAN_CURTO ? 5000 : span <= 3600 ? 20000 : 60000;
+  estado.timers.graficos = setInterval(carregarGraficos, graf);
+  estado.timers.resumo = setInterval(carregarResumo, res);
 }
 
 function relogio() {
@@ -1814,11 +2135,20 @@ async function iniciar() {
   // por causa de um único listener apontando para um elemento que saiu do HTML.
   try { montarRecolhiveis(); } catch (e) { console.error('recolhíveis:', e); }
   try { ligarEventos(); } catch (e) { console.error('eventos:', e); }
+  // o período escolhido sobrevive ao F5; sem escolha nenhuma, "ao vivo"
+  try {
+    const salvo = localStorage.getItem(CHAVE_PERIODO);
+    if (salvo && PERIODOS.some((p) => p.id === salvo)) estado.periodo = salvo;
+  } catch (e) { /* segue no padrão */ }
+  estado.span = janela().span;
+  renderPeriodo();
   await carregarConfig();
   try {
     const s = await pegar('/api/status');
     estado.links = s.links;
     estado.porta = s.porta;
+    estado.inicioDados = s.inicio_dados || null;
+    renderPeriodo();
     // tudo que depende de QUAIS links existem vem depois desta resposta
     preencherFiltrosDeLink();
     montarLegenda();
@@ -1830,7 +2160,8 @@ async function iniciar() {
       (s.port_fallback ? ' (porta 666 indisponível — veja o README)' : '');
   } catch (e) { console.error(e); }
   await Promise.all([carregarGraficos(), carregarResumo(), carregarEventos(),
-                     carregarVelocidade(), carregarTrace(), carregarAlvos(), carregarMesh()]);
+                     carregarVelocidade(), carregarTrace(), carregarAlvos(),
+                     carregarMesh(), carregarScan()]);
   conectar();
   if (!secaoRecolhida('Configurações e alertas')) carregarIfaces();
   setInterval(relogio, 1000);

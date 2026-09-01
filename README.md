@@ -90,6 +90,7 @@ relatórios que vão para a operadora.
 | 🧭 **Vigia o DNS da LAN** | este aparelho é o servidor DNS da rede: uma sonda separada, pela rota normal, avisa quando ninguém consegue navegar apesar dos links no ar |
 | 🚀 **Testa a velocidade de cada link** | download e upload reais, um botão por internet — e uma medição automática por dia, de madrugada |
 | 🗺️ **Traça o caminho por cada internet** | traceroute próprio, sem root e sem o binário, com a bandeira do país de cada salto |
+| 🕵️ **Varre a rede de casa** | quem está ligado agora: IP, MAC, fabricante pelo OUI, palpite do aparelho, cabo ou Wi-Fi e portas abertas — sem `nmap`, sem `arp-scan` e sem root |
 | 🔗 **Mostra o Meshnet** | o acesso remoto a este aparelho, com quem está conectado e por qual operadora o túnel está saindo |
 | 📈 **Guarda 5 anos de histórico** | amostras de 2 s por 48 h, minuto por 90 dias, hora por 5 anos — e estabiliza abaixo de 70 MB |
 | 📄 **Gera o PDF da prova** | um botão por internet: hora exata de cada queda, duração e causa, para mandar à operadora. Escrito à mão em Python puro — não há reportlab nem navegador headless neste aparelho |
@@ -279,6 +280,74 @@ cada painel em cabeça e corpo.
 Um cuidado que não é óbvio: um `<svg>` dentro de seção fechada mede **0 px**.
 Ao reabrir, o desenho tem que ser refeito, senão aparece na escala errada.
 
+## O período manda em tudo
+
+O seletor de período era um detalhe dentro do painel de latência, e parecia
+mandar só ali. Agora é um **bloco próprio no alto da página**, e tudo o que vem
+abaixo — latência, perda, estatísticas, linha do tempo e o histórico de quedas —
+fala da mesma janela:
+
+`ao vivo` · `1 min` · `10 min` · `30 min` · `1 h` · `2 h` · `24 h` · `2 dias` ·
+`7 dias` · `30 dias` · `tudo`
+
+- **Ao vivo** é o padrão: janela deslizante de 2 minutos, redesenhada a cada
+  ciclo de sondagem (2 s). É o modo de olhar enquanto o problema acontece.
+- **Tudo** começa na amostra mais antiga que o banco ainda guarda — o
+  `/api/status` responde `inicio_dados` para a página saber onde é isso.
+- A escolha fica no `localStorage`: dá F5 e o período continua o mesmo.
+- A cadência de recarga segue a janela: 2 s ao vivo, 10 s até uma hora, 60 s
+  daí para cima. Redesenhar 30 dias a cada 2 segundos só gastaria CPU do
+  Orange Pi.
+
+### O destaque da queda
+
+A pergunta que se faz ao escolher um período é sempre a mesma: **caiu? quantas
+vezes? por quantos segundos?** Isso estava diluído numa tabela de 13 métricas.
+Agora é a primeira coisa que se lê, um cartão por link, com os segundos cheios
+(é assim que a operadora conta) e a duração humana ao lado — mais o número de
+quedas, a maior delas e o uptime da janela. Link caído neste instante ganha uma
+linha "fora do ar AGORA há tanto tempo".
+
+Duas causas continuam **fora da conta**, porque em nenhuma delas a operadora tem
+culpa: a queda provocada pelo próprio teste de velocidade e o buraco de segundos
+ao trocar a placa de rede do link.
+
+## Aparelhos na rede
+
+O monitor sabia tudo sobre os dois canos de internet e nada sobre a casa. A
+varredura preenche o outro lado: **quem está ligado aqui dentro**, com IP, MAC,
+fabricante, palpite do que é o aparelho, cabo ou Wi-Fi e portas abertas.
+
+Neste aparelho não existe `nmap`, não existe `arp-scan` e `sudo` pede senha.
+Então:
+
+| O quê | Como, sem root |
+|---|---|
+| **Descoberta** | um único soquete ICMP de datagrama (o mesmo truque do traceroute) dispara um echo para cada endereço da faixa — e junto vai um datagrama UDP vazio para a porta 9, **só para obrigar o kernel a resolver o ARP** de quem não responde |
+| **Quem está calado** | `ip neigh` depois da varredura. Foi o que levou esta casa de 7 aparelhos (só ICMP) para 12: celular com firewall não responde ao ping, mas **precisa** responder ao ARP para existir na rede |
+| **Fabricante** | prefixo do MAC. Tabela local com os fabricantes comuns por aqui + API pública, com cache permanente no banco (`oui:*`) — a fonte gratuita corta em ~1 consulta por segundo |
+| **Cabo ou Wi-Fi** | **palpite pela latência**, e a página diz isso. Aqui o cabo responde em 0,17–0,49 ms com desvio de 0,03–0,15 ms; o Wi-Fi, em 2,8–3,7 ms com desvio de 0,39–0,75 ms. Entre os dois fica a faixa honesta do "não dá para afirmar" |
+| **Portas** | `connect()` de TCP comum, prazo de 0,7 s, 24 em paralelo. Lista curta escolhida pelo que **diz** do aparelho (9100 é impressora, 62078 é iPhone, 554 é câmera, 32400 é Plex) ou lista completa |
+| **O que é o aparelho** | portas primeiro, fabricante depois. Gateway e o próprio Orange Pi são reconhecidos direto |
+
+Tudo preso à interface (`SO_BINDTODEVICE`): varrer a rede da GIGA não pode sair
+pela IMPACTO só porque ela é a rota padrão. Dá para varrer qualquer uma das três
+redes — a LAN de casa, a da GIGA e a da IMPACTO.
+
+**A consulta de fabricante é a exceção**: ela sai pela rota padrão, não pela
+placa varrida. A `eth0` daqui é só rede local, sem rota default nenhuma — prender
+o soquete nela fazia toda consulta morrer no timeout e gravar "fabricante
+desconhecido" no cache permanente, que é pior do que não ter consultado.
+
+Nesta rede **nem PTR, nem NetBIOS, nem mDNS respondem** (foi testado). Por isso o
+nome do aparelho é um **apelido que você dá**, clicando no nome na tabela: fica
+guardado pelo MAC, sobrevive à troca de IP e não se perde no reset do histórico.
+Quem aparece pela primeira vez ganha a marca **novo na rede** — e a data em que
+foi visto pela primeira vez fica na última coluna.
+
+Uma varredura de /24 leva ~7 s com o cache de fabricantes quente (a primeira,
+com MACs novos, chega a 20 s por causa do limite de 1 consulta por segundo).
+
 ## Perda de pacotes não é gráfico
 
 Perda fica em zero quase o tempo todo. Num gráfico de linha isso vira um traço
@@ -390,15 +459,18 @@ roteamento continua exatamente como estava.
 
 | Rota | O que devolve |
 |---|---|
-| `GET /api/status` | estado atual de cada link, IP externo, uptime 24h/7d/30d, evento aberto |
+| `GET /api/status` | estado atual de cada link, IP externo, uptime 24h/7d/30d, evento aberto, `inicio_dados` |
 | `GET /api/samples?link=&from=&to=&res=auto` | série temporal (`raw`/`minute`/`hour`) |
-| `GET /api/events?link=&tipo=&limit=&offset=` | histórico de quedas com duração |
+| `GET /api/events?link=&tipo=&from=&to=&limit=&offset=` | histórico de quedas com duração |
 | `GET /api/summary?period=24h` | uptime, nº de quedas, downtime, rtt, jitter, perda |
 | `GET /api/speedtest?link=&limit=` | último teste de cada link, histórico e o que está rodando |
 | `POST /api/speedtest` | dispara o teste: `{"link":"GIGA","dur":5}` — `409` se já houver um |
 | `GET /api/speedtest.csv?link=` | o log inteiro dos testes em CSV |
 | `GET /api/traceroute?link=` | último traçado de cada link, e o que está rodando |
 | `POST /api/traceroute` | traça o caminho saindo por um link: `{"link":"GIGA","destino":"1.1.1.1"}` |
+| `GET /api/scan?rede=` | redes que dá para varrer, a última varredura e os apelidos guardados |
+| `POST /api/scan` | varre: `{"rede":"eth0\|192.168.200.0/24","portas":"rapido"}` — `409` se já houver uma |
+| `POST /api/scan/nome` | batiza um aparelho: `{"mac":"d4:0d:ab:46:4b:cc","nome":"TV da sala"}` |
 | `GET /api/alvos` | para onde cada sonda aponta e o estado de cada servidor DNS da LAN |
 | `GET /api/mesh` | estado do Meshnet, pares, e por qual link o túnel está saindo |
 | `POST /api/mesh` | liga/desliga: `{"meshnet":true}` — desligar exige `{"confirmar":"DESLIGAR"}` |
@@ -407,7 +479,7 @@ roteamento continua exatamente como estava.
 | `POST /api/links` | troca a placa (e o alvo do link LAN) ao vivo: `{"links":{"GIGA":{"iface":"eth0"}}}` |
 | `GET /api/ifaces` | só as placas de rede, com IP, gateway, USB e estado do cabo |
 | `POST /api/webhook/test` | dispara um payload de teste |
-| `GET /api/stream` | SSE ao vivo (`status` a cada 2 s, `alerta` na hora) |
+| `GET /api/stream` | SSE ao vivo (`status` a cada 2 s, `alerta` na hora, e o andamento de `speedtest`, `traceroute` e `varredura`) |
 | `GET /api/report.pdf?period=24h&link=GIGA` | relatório em PDF; com `link`, só as quedas daquele link |
 | `GET /api/logs` | pacote de diagnóstico |
 | `POST /api/reset` | apaga o histórico — exige `{"confirmar":"APAGAR"}` |
@@ -438,6 +510,7 @@ alerts.py     regras de alerta, webhook, barramento SSE
 server.py     API HTTP, SSE, estáticos
 trace.py      traceroute próprio, sem root e sem o binário `traceroute`
 mesh.py       estado e liga/desliga do NordVPN Meshnet
+scan.py       varredura da rede local (ICMP + ARP + portas + fabricante)
 pdf.py        escritor de PDF 1.4 feito à mão
 report.py     montagem do relatório
 run.sh              lock de instância única + watchdog
@@ -457,6 +530,19 @@ static/       index.html, app.js, style.css
   **derrubaram o DNS da LAN inteira**. Rota estática gravada em perfil do
   NetworkManager sobrevive a reboot e não aparece num `nmcli con show` resumido.
   Se um dia voltarem, o alvo volta a mentir: `ip route show | grep 8.8.8.8`.
+- **O primeiro ping de cada aparelho mente.** Na varredura da rede, o pacote que
+  inaugura a conversa espera a resolução do ARP e volta inflado — um celular que
+  responde em 3 ms apareceu com **177 ms**. Qualquer julgamento feito sobre esse
+  número (cabo ou Wi-Fi, por exemplo) sai errado. A descoberta guarda só o
+  **menor** tempo visto, e quem é encontrado leva uma rajada de 5 pings depois,
+  com o ARP já resolvido — é essa segunda medida que vale.
+- **Cache permanente guarda o erro junto com o acerto.** A consulta de fabricante
+  saía presa à placa varrida; para a `eth0`, que é só rede local e não tem rota
+  default, toda consulta morria no timeout — e o "não achei" ia para o cache
+  permanente. O resultado é pior do que não ter cache: os aparelhos ficavam
+  marcados como fabricante desconhecido *para sempre*, sem nova tentativa. A
+  consulta agora sai pela rota padrão, e as entradas envenenadas tiveram de ser
+  apagadas à mão (`DELETE FROM meta WHERE key LIKE 'oui:%'`).
 - **O log do Pi-hole engana na hora de investigar**: o conteúdo é gravado em
   **horário local**, mas os `mtime` dos arquivos dentro do container saem em
   **UTC**. Misturar os dois faz analisar uma janela três horas fora do

@@ -654,6 +654,9 @@ def reset(escopo="historico"):
             pass                      # a tabela so existe se ja houve AUTOINCREMENT
         conn.execute("DELETE FROM meta WHERE key LIKE 'ip_externo:%'")
         if escopo == "tudo":
+            # a ultima varredura e historico; os apelidos dos aparelhos
+            # (scan:conhecidos) nao sao, e ficam
+            conn.execute("DELETE FROM meta WHERE key LIKE 'scan:ultimo:%'")
             conn.execute("DELETE FROM config")
             for k, v in DEFAULT_CONFIG.items():
                 conn.execute("INSERT INTO config(key,value) VALUES(?,?)", (k, v))

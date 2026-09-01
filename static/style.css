@@ -1002,3 +1002,192 @@ main > .painel:nth-of-type(5n+5) { --acento: #ffc531; --acento-2: #ff9d5c; }
 @media (prefers-reduced-motion: reduce) {
   .painel-toggle { transition: none; }
 }
+
+/* ===================================================================
+   Período — um seletor só, mandando em todas as seções de tempo
+   =================================================================== */
+/* O painel tem borda de acento porque ele não é mais um detalhe do gráfico de
+   latência: é o controle do qual todo o resto da página depende. */
+.painel-periodo {
+  border-color: rgba(77, 163, 255, .35);
+  box-shadow: inset 3px 0 0 var(--acento);
+}
+.painel-periodo .periodos { max-width: 100%; }
+.btn-vivo.ativo { background: #1f6b3f; border-color: #2f8f56; }
+.btn-vivo.ativo::first-letter { color: #7dffb0; }
+/* a bolinha do "ao vivo" pulsa só quando ele está escolhido: piscar o tempo
+   todo vira ruído numa página que já tem alerta vermelho */
+@keyframes pulso-vivo { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.btn-vivo.ativo { animation: pulso-vivo 2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .btn-vivo.ativo { animation: none; } }
+
+.periodo-janela {
+  margin: 10px 0 0;
+  color: var(--rot-1);
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+}
+.periodo-eco {
+  align-self: flex-start;
+  font-size: 0.78rem;
+  color: var(--rot-1);
+  border: 1px solid var(--borda);
+  border-radius: 999px;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+
+/* --- destaque das quedas: a resposta de "caiu? quantas vezes? quanto tempo?" */
+.quedas-destaque {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.qd {
+  background: var(--surface-2);
+  border: 1px solid var(--borda);
+  border-radius: 10px;
+  padding: 11px 13px;
+}
+.qd-topo { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
+.qd-topo b { font-size: 0.95rem; }
+.qd-frase { margin: 0; color: var(--ink-2); font-size: 0.9rem; }
+.qd-ok { border-color: rgba(46, 204, 113, .32); }
+.qd-ok .qd-frase { color: var(--good-2); }
+.qd-vazio { opacity: .72; }
+.qd-caiu {
+  border-color: rgba(255, 90, 90, .45);
+  background: linear-gradient(180deg, rgba(255, 90, 90, .10), transparent 60%), var(--surface-2);
+}
+.qd-numeros { display: flex; gap: 18px; }
+.qd-num { display: flex; flex-direction: column; line-height: 1.15; }
+.qd-num b {
+  font-size: 1.7rem;
+  font-weight: 700;
+  color: #ff9b9b;
+  font-variant-numeric: tabular-nums;
+}
+.qd-num span { font-size: 0.74rem; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.qd-num small { font-size: 0.78rem; color: var(--ink-2); margin-top: 2px; }
+.qd-rodape {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--borda);
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.qd-rodape b { color: var(--ink-2); }
+.qd-agora {
+  margin: 8px 0 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #ff9b9b;
+}
+
+/* ===================================================================
+   Aparelhos na rede (varredura)
+   =================================================================== */
+.sc-progresso { display: flex; align-items: center; gap: 10px; margin: 4px 0 10px; }
+.sc-barra {
+  flex: 1;
+  height: 8px;
+  background: var(--surface-2);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.sc-barra i {
+  display: block;
+  height: 100%;
+  width: 5%;
+  background: linear-gradient(90deg, var(--acento), var(--acento-2));
+  transition: width .3s ease;
+}
+.tabela-scan code { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 0.82rem; }
+.tabela-scan .mac { color: var(--muted); }
+.sc-nome {
+  background: none;
+  border: none;
+  border-bottom: 1px dashed var(--borda-forte);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  padding: 0 0 1px;
+  cursor: pointer;
+  text-align: left;
+}
+.sc-nome:hover { color: var(--acento); border-color: var(--acento); }
+.tabela-scan td[data-rot="Aparelho"] small { display: block; color: var(--muted); font-size: 0.75rem; }
+.chip-con { font-size: 0.76rem; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+.c-cabo { background: rgba(46, 204, 113, .16); color: #8ef0b6; }
+.c-wifi { background: rgba(77, 163, 255, .16); color: #9fd0ff; }
+.c-indefinida { background: rgba(250, 178, 25, .14); color: #ffd479; }
+.c-desconhecida { background: var(--surface-2); color: var(--muted); }
+.cel-portas { max-width: 320px; }
+.porta {
+  display: inline-block;
+  margin: 1px 4px 1px 0;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--borda);
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+}
+.porta small { color: var(--muted); font-size: 0.7rem; }
+.tag-eu { background: rgba(77, 163, 255, .18); color: #9fd0ff; }
+.tag-gw { background: rgba(169, 139, 255, .18); color: #c3b3f5; }
+.tag-novo { background: rgba(250, 178, 25, .18); color: #ffd479; }
+.tag-rand { background: var(--surface-3); color: var(--muted); }
+.tabela-scan tbody tr.linha-eu { background: rgba(77, 163, 255, .05); }
+.tabela-scan tbody tr.linha-nova { box-shadow: inset 3px 0 0 var(--warning); }
+.legenda-scan { margin-top: 10px; gap: 14px; }
+.legenda-scan .leg { gap: 7px; }
+
+@media (max-width: 760px) {
+  /* a tabela da varredura vira cartão, como a de eventos: oito colunas não
+     cabem em tela de celular, e é no celular que se olha "quem está na rede" */
+  #tab-scan thead { display: none; }
+  #tab-scan, #tab-scan tbody { display: block; }
+  #tab-scan tbody tr {
+    display: block;
+    background: var(--surface-2);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 11px 13px;
+    margin-bottom: 10px;
+  }
+  #tab-scan tbody tr:hover td { background: none; }
+  #tab-scan td {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 14px;
+    border: none;
+    padding: 4px 0;
+    white-space: normal;
+    text-align: right;
+  }
+  #tab-scan td::before {
+    content: attr(data-rot);
+    color: var(--muted);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    flex: none;
+  }
+  #tab-scan td[data-rot="Aparelho"] {
+    font-size: 1rem;
+    padding-bottom: 8px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--borda);
+    flex-wrap: wrap;
+  }
+  #tab-scan td.vazio { display: block; text-align: center; padding: 18px 0; }
+  #tab-scan td.vazio::before { content: none; }
+  .cel-portas { max-width: none; }
+  .qd-num b { font-size: 1.45rem; }
+}

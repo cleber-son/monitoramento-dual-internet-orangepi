@@ -8,6 +8,7 @@ import queue
 import re
 import socket
 import socketserver
+import sqlite3
 import threading
 import time
 import urllib.parse
@@ -16,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import db
 import speedtest
 import mesh as mesh_mod
+import scan as scan_mod
 import trace as trace_mod
 
 log = logging.getLogger("netmon.server")
@@ -98,6 +100,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.api_alvos()
             if path == "/api/mesh":
                 return self.api_mesh_get()
+            if path == "/api/scan":
+                return self.api_scan_get()
             if path == "/api/speedtest.csv":
                 return self.api_speedtest_csv()
             if path == "/api/config":
@@ -152,6 +156,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.api_traceroute_post(data)
             if path == "/api/mesh":
                 return self.api_mesh_post(data)
+            if path == "/api/scan":
+                return self.api_scan_post(data)
+            if path == "/api/scan/nome":
+                return self.api_scan_nome(data)
             if path == "/api/webhook/test":
                 url = data.get("webhook_url") or db.get_config().get("webhook_url")
                 if not url:
@@ -184,6 +192,8 @@ class Handler(BaseHTTPRequestHandler):
             "port_fallback": self.app["port"] != PREFERRED_PORT,
             "servidor_uptime_s": now - int(self.app["started"]),
             "links": links,
+            # o periodo "tudo" da pagina precisa saber onde a coleta comecou
+            "inicio_dados": inicio_dados(),
             "dns_lan": (self.app["dns_lan"].snapshot()
                          if self.app.get("dns_lan") else None),
         })
@@ -434,6 +444,56 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"ok": True, "meshnet": ligar, "mensagem": msg}, 202)
 
     # -- alvos das sondas --------------------------------------------------
+    # -- varredura da rede -------------------------------------------------
+    def api_scan_get(self):
+        """Redes que da para varrer + o resultado da ultima varredura.
+
+        A pagina abre mostrando a varredura anterior: sem isso, quem abre o
+        painel ve uma tabela vazia e tem de esperar meio minuto para saber o
+        que ja se sabia.
+        """
+        q = self._query()
+        try:
+            redes = scan_mod.redes(self.app)
+        except Exception:
+            log.exception("falha listando as redes locais")
+            redes = []
+        rede_id = q.get("rede") or (redes[0]["id"] if redes else None)
+        self._json({
+            "rodando": scan_mod.em_andamento(),
+            "redes": redes,
+            "rede": rede_id,
+            "ultimo": scan_mod.ultimo(rede_id) if rede_id else None,
+            "conhecidos": scan_mod.conhecidos(),
+        })
+
+    def api_scan_post(self, data):
+        rede = data.get("rede") or None
+        modo = str(data.get("portas") or "rapido")
+        if modo not in ("nenhuma", "rapido", "completo"):
+            return self._err(400, "portas deve ser nenhuma, rapido ou completo")
+        try:
+            scan_mod.iniciar(self.app, rede, modo)
+        except RuntimeError as exc:
+            # 409 e o codigo do "ja tem uma rodando"; 400 e rede que nao existe
+            codigo = 409 if "ja existe" in str(exc) else 400
+            return self._err(codigo, str(exc))
+        self._json({"ok": True, "rede": rede, "portas": modo,
+                    "mensagem": "varredura iniciada; acompanhe pelo /api/stream"}, 202)
+
+    def api_scan_nome(self, data):
+        """Apelido do aparelho, guardado pelo MAC.
+
+        Nesta rede nem PTR, nem NetBIOS, nem mDNS respondem: o unico jeito de
+        saber que aquele MAC e "a TV da sala" e o usuario dizer.
+        """
+        try:
+            nome = scan_mod.apelidar(data.get("mac"), data.get("nome"))
+        except ValueError as exc:
+            return self._err(400, str(exc))
+        self._json({"ok": True, "mac": (data.get("mac") or "").lower(),
+                    "nome": nome})
+
     def api_alvos(self):
         """Para onde cada medicao aponta, para a pagina poder mostrar.
 
@@ -725,6 +785,7 @@ class Handler(BaseHTTPRequestHandler):
         log.warning("RESET pedido pela interface (escopo=%s, de %s)",
                     escopo, self.address_string())
         db.reset(escopo)
+        _inicio_cache["ts"] = 0.0      # o periodo "tudo" recomeça de hoje
         for p in self.app["probes"]:
             p.resetar()
         self._json({"ok": True, "escopo": escopo,
@@ -965,6 +1026,35 @@ def resumo_link(link_id, frm, to):
         "dns_avg": round(r["d"], 2) if r["d"] is not None else None,
         "amostras": r["n"] or 0,
     }
+
+
+_inicio_cache = {"ts": 0.0, "valor": None}
+
+
+def inicio_dados():
+    """Epoch da amostra mais antiga que ainda existe, para o periodo "tudo".
+
+    Vale para o painel inteiro, nao por link, e muda uma vez por dia (quando a
+    purga corta a cauda): fica em cache de 10 minutos porque o /api/status e
+    respondido a cada abertura de pagina.
+    """
+    agora = time.time()
+    if agora - _inicio_cache["ts"] < 600:
+        return _inicio_cache["valor"]
+    valor = None
+    conn = db.connect(readonly=True)
+    try:
+        for tabela in ("agg_hour", "agg_minute", "samples"):
+            try:
+                r = conn.execute("SELECT MIN(ts) t FROM %s" % tabela).fetchone()
+            except sqlite3.Error:
+                continue
+            if r and r["t"] and (valor is None or r["t"] < valor):
+                valor = int(r["t"])
+    finally:
+        conn.close()
+    _inicio_cache.update(ts=agora, valor=valor)
+    return valor
 
 
 def uptime_periodos(link_id, now):

@@ -38,6 +38,34 @@
 <!-- ------------------------------------------------ cards de status -->
 <section class="cards" id="cards" aria-label="Estado atual dos links"></section>
 
+<!-- ------------------------------------------------ período (manda em tudo abaixo) -->
+<section class="painel painel-periodo" id="painel-periodo">
+  <div class="painel-topo">
+    <div>
+      <h2>Período</h2>
+      <p class="painel-sub">Este seletor manda em <b>tudo o que vem abaixo</b>:
+        latência, perda, estatísticas, linha do tempo e o histórico de quedas
+        passam a falar da mesma janela de tempo.</p>
+    </div>
+    <div class="periodos" id="periodos" role="group" aria-label="Período">
+      <button class="btn-per btn-vivo ativo" data-per="vivo">● Ao vivo</button>
+      <button class="btn-per" data-per="1m">1 min</button>
+      <button class="btn-per" data-per="10m">10 min</button>
+      <button class="btn-per" data-per="30m">30 min</button>
+      <button class="btn-per" data-per="1h">1 h</button>
+      <button class="btn-per" data-per="2h">2 h</button>
+      <button class="btn-per" data-per="24h">24 h</button>
+      <button class="btn-per" data-per="2d">2 dias</button>
+      <button class="btn-per" data-per="7d">7 dias</button>
+      <button class="btn-per" data-per="30d">30 dias</button>
+      <button class="btn-per" data-per="all">Tudo</button>
+    </div>
+  </div>
+  <span class="pill pill-neutro resumo-cabeca" id="periodo-pill">Ao vivo</span>
+  <p class="periodo-janela" id="periodo-janela">—</p>
+  <div class="quedas-destaque" id="quedas-destaque"></div>
+</section>
+
 <!-- ------------------------------------------------ latência -->
 <section class="painel">
   <div class="painel-topo">
@@ -47,18 +75,7 @@
         só até a sua rede local — quando ela sobe junto com as outras, o problema é
         aqui dentro. Faixa clara = mínimo–máximo do período.</p>
     </div>
-    <div class="periodos-caixa">
-      <span class="periodos-rot">Período</span>
-    <div class="periodos" id="periodos" role="group" aria-label="Período">
-      <button class="btn-per" data-span="30">30s</button>
-      <button class="btn-per" data-span="60">1min</button>
-      <button class="btn-per" data-span="3600">1h</button>
-      <button class="btn-per" data-span="21600">6h</button>
-      <button class="btn-per ativo" data-span="86400">24h</button>
-      <button class="btn-per" data-span="604800">7d</button>
-      <button class="btn-per" data-span="2592000">30d</button>
-    </div>
-    </div>
+    <span class="periodo-eco resumo-cabeca" id="eco-latencia">—</span>
   </div>
   <div class="legenda" id="legenda"></div>
   <div class="grafico-wrap" id="wrap-lat">
@@ -211,6 +228,58 @@
   </div>
 </section>
 
+<!-- ------------------------------------------------ varredura da rede -->
+<section class="painel">
+  <div class="painel-topo">
+    <div>
+      <h2>Aparelhos na rede</h2>
+      <p class="painel-sub">Uma varredura da sua rede: quem está ligado agora, com
+        IP, MAC, fabricante da placa, palpite do que é o aparelho, se entrou por
+        cabo ou por Wi-Fi e quais portas estão abertas. Aparelho calado também
+        aparece — quem não responde ao ping ainda precisa responder ao ARP para
+        existir na rede.</p>
+    </div>
+    <div class="filtros">
+      <label class="campo"><span>Rede</span>
+        <select id="sc-rede"></select>
+      </label>
+      <label class="campo campo-curto"><span>Portas</span>
+        <select id="sc-portas">
+          <option value="rapido" selected>as comuns (rápido)</option>
+          <option value="completo">lista completa (devagar)</option>
+          <option value="nenhuma">não olhar portas</option>
+        </select>
+      </label>
+      <button class="btn btn-primario" id="sc-rodar" type="button">Varrer a rede</button>
+    </div>
+  </div>
+  <p id="sc-msg" class="muted">—</p>
+  <div class="sc-progresso oculto" id="sc-progresso">
+    <div class="sc-barra"><i id="sc-barra-fill"></i></div>
+    <span class="muted" id="sc-etapa"></span>
+  </div>
+  <div class="tabela-wrap">
+    <table class="tabela tabela-scan" id="tab-scan">
+      <thead><tr>
+        <th scope="col">Aparelho</th><th scope="col">IP</th><th scope="col">MAC</th>
+        <th scope="col">Fabricante</th><th scope="col">Conexão</th>
+        <th scope="col">Latência</th><th scope="col">Portas abertas</th>
+        <th scope="col">Conhecido desde</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="legenda legenda-scan">
+    <span class="leg"><span class="chip-con c-cabo">🔌 cabo</span>latência baixa e firme</span>
+    <span class="leg"><span class="chip-con c-wifi">📶 Wi-Fi</span>latência maior e variável</span>
+    <span class="leg"><span class="chip-con c-indefinida">? indefinida</span>entre os dois</span>
+    <span class="leg"><span class="chip-con c-desconhecida">— sem medida</span>só apareceu no ARP</span>
+    <span class="leg muted">Cabo ou Wi-Fi é <b>palpite pela latência</b>: não existe
+      como perguntar isso a um aparelho pela rede. Clique no nome para batizar o
+      aparelho — o apelido fica guardado pelo MAC.</span>
+  </div>
+</section>
+
 <!-- ------------------------------------------------ o que é medido -->
 <section class="painel painel-fino">
   <h2>O que está sendo medido</h2>
@@ -253,7 +322,8 @@
   <h2>Histórico de quedas e alertas</h2>
   <div class="painel-topo">
     <div>
-      <p class="painel-sub">Registro completo, com hora exata da queda, do retorno e a duração.</p>
+      <p class="painel-sub">Registro completo, com hora exata da queda, do retorno e a duração.
+        Segue o <b>período escolhido lá em cima</b> — <span id="ev-periodo">—</span>.</p>
     </div>
     <div class="filtros">
       <label class="campo"><span>Link</span>
