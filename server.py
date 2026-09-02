@@ -102,6 +102,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.api_mesh_get()
             if path == "/api/scan":
                 return self.api_scan_get()
+            if path == "/api/scan/log":
+                return self.api_scan_log()
+            if path == "/api/scan.pdf":
+                return self.api_scan_pdf()
             if path == "/api/speedtest.csv":
                 return self.api_speedtest_csv()
             if path == "/api/config":
@@ -326,7 +330,8 @@ class Handler(BaseHTTPRequestHandler):
         permitido = {"webhook_url", "webhook_enabled", "lat_limiar_ms",
                      "loss_limiar_pct", "jitter_limiar_ms", "som_habilitado",
                      "cooldown_s", "auto_speed_enabled", "auto_speed_hora",
-                     "auto_speed_dur"}
+                     "auto_speed_dur", "auto_scan_enabled", "auto_scan_hora",
+                     "auto_scan_portas", "auto_scan_rede"}
         pairs = {}
         for k, v in data.items():
             if k not in permitido:
@@ -343,7 +348,7 @@ class Handler(BaseHTTPRequestHandler):
                 if n <= 0:
                     return self._err(400, "%s deve ser maior que zero" % k)
                 v = n
-            if k == "auto_speed_hora":
+            if k in ("auto_speed_hora", "auto_scan_hora"):
                 try:
                     h, _, m = str(v).partition(":")
                     h, m = int(h), int(m or 0)
@@ -360,7 +365,15 @@ class Handler(BaseHTTPRequestHandler):
                     return self._err(400, "duracao deve ficar entre %g e %g s"
                                      % (speedtest.DUR_MIN, speedtest.DUR_MAX))
                 v = n
-            if k in ("webhook_enabled", "som_habilitado", "auto_speed_enabled"):
+            if k == "auto_scan_portas" and str(v) not in ("nenhuma", "rapido", "completo"):
+                return self._err(400, "portas deve ser nenhuma, rapido ou completo")
+            if k == "auto_scan_rede":
+                # vazio = "a rede de casa", resolvido na hora de varrer: gravar
+                # um id de rede que sumiu com a troca de placa nao pode travar
+                # o agendador, ele so cai de volta para a LAN
+                v = str(v or "").strip()[:120]
+            if k in ("webhook_enabled", "som_habilitado", "auto_speed_enabled",
+                     "auto_scan_enabled"):
                 v = "1" if str(v) in ("1", "true", "True", "on") else "0"
             pairs[k] = v
         if not pairs:
@@ -473,13 +486,63 @@ class Handler(BaseHTTPRequestHandler):
         if modo not in ("nenhuma", "rapido", "completo"):
             return self._err(400, "portas deve ser nenhuma, rapido ou completo")
         try:
-            scan_mod.iniciar(self.app, rede, modo)
+            scan_mod.iniciar(self.app, rede, modo, origem="manual")
         except RuntimeError as exc:
             # 409 e o codigo do "ja tem uma rodando"; 400 e rede que nao existe
             codigo = 409 if "ja existe" in str(exc) else 400
             return self._err(codigo, str(exc))
         self._json({"ok": True, "rede": rede, "portas": modo,
                     "mensagem": "varredura iniciada; acompanhe pelo /api/stream"}, 202)
+
+    def api_scan_log(self):
+        """Historico das varreduras.
+
+        A `meta` guarda so o ultimo retrato de cada rede, sobrescrito toda vez.
+        Este log e o que sobrevive: prova que a varredura das 14h rodou, e
+        guarda QUEM apareceu em cada dia mesmo depois que o retrato do dia
+        deixou de existir.
+        """
+        q = self._query()
+        try:
+            limit = min(500, max(1, int(q.get("limit") or 100)))
+        except ValueError:
+            return self._err(400, "limit invalido")
+        cfg = db.get_config()
+        prox = None
+        if cfg.get("auto_scan_enabled") == "1":
+            prox = cfg.get("auto_scan_hora") or "14:00"
+        self._json({
+            "scans": db.list_scans(limit, q.get("rede") or None),
+            "auto": {"ligado": cfg.get("auto_scan_enabled") == "1",
+                     "hora": prox,
+                     "ultima": db.get_meta("auto_scan_ultima")},
+            "janela_novo_s": db.NOVO_JANELA_S,
+        })
+
+    def api_scan_pdf(self):
+        """PDF dos aparelhos da rede -- o inventario para guardar ou imprimir."""
+        import report
+        q = self._query()
+        rede_id = q.get("rede") or None
+        if not rede_id:
+            redes = scan_mod.redes(self.app)
+            rede_id = redes[0]["id"] if redes else None
+        dados = scan_mod.ultimo(rede_id) if rede_id else None
+        if not dados:
+            return self._err(404, "nenhuma varredura guardada para esta rede — "
+                                  "rode a varredura antes de pedir o PDF")
+        try:
+            blob = report.gerar_scan(dados, db.list_scans(30, rede_id))
+        except Exception:
+            log.exception("falha gerando o PDF dos aparelhos")
+            return self._err(500, "falha gerando o PDF")
+        import alerts as _al
+        nome = "aparelhos-na-rede-%s.pdf" % _al.datetime.fromtimestamp(
+            time.time(), _al.TZ).strftime("%Y%m%d-%H%M")
+        self._send(200, blob, "application/pdf", {
+            "Content-Disposition": 'attachment; filename="%s"' % nome,
+            "Cache-Control": "no-store",
+        })
 
     def api_scan_nome(self, data):
         """Apelido do aparelho, guardado pelo MAC.
@@ -735,6 +798,18 @@ class Handler(BaseHTTPRequestHandler):
                                  t["down_mbps"], t["up_mbps"], t["ping_ms"],
                                  t["servidor"] or "-",
                                  ("ERRO: " + t["erro"]) if t["erro"] else ""))
+            partes.append("")
+            partes.append("--- ULTIMAS VARREDURAS DA REDE ---")
+            for v in db.list_scans(20):
+                partes.append("  %s %-8s %-28s %d aparelho(s), %d novo(s) %s"
+                              % (_al.fmt_iso(v["ts"]), v["origem"],
+                                 v["rotulo"] or v["rede_id"], v["total"],
+                                 v["n_novos"],
+                                 ("ERRO: " + v["erro"]) if v["erro"] else ""))
+                for n in v["novos"]:
+                    partes.append("             novo: %-17s %-15s %s"
+                                  % (n.get("mac") or "-", n.get("ip") or "-",
+                                     n.get("nome") or n.get("vendor") or ""))
             partes.append("")
             partes.append("--- CONFIGURACAO ---")
             for k, v in sorted(db.get_config().items()):

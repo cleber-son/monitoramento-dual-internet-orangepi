@@ -263,6 +263,60 @@ estiver desligado às 4h, o teste sai quando ele voltar, e não duas vezes se o
 serviço reiniciar às 4h05. É o histórico que se leva para a operadora — a
 velocidade entregue todo dia, no mesmo horário.
 
+### O horário agendado é o SEU, não o do relógio do aparelho
+
+**Esta armadilha já custou três dias de teste no horário errado.** O Orange Pi
+roda em **UTC** (`timedatectl` diz `Etc/UTC`) e a casa está em
+`America/Sao_Paulo`. O agendador usava `time.localtime()`, que aqui devolve UTC:
+"4h" virava 04:00 UTC = **01:00 de Brasília**. E como a página formata no fuso do
+*navegador*, o log mostrava 01:00 — parecia que o agendador simplesmente ignorava
+a configuração.
+
+Todo horário agendado passa por `netmon._agora()`, que usa o mesmo fuso do
+painel, do log e do relatório (`alerts.TZ`). **Nunca use `time.localtime()` no
+netmon** — nem para agendar, nem para montar a data do "já rodou hoje".
+
+## Varredura automática da rede
+
+Um retrato por dia de quem está ligado na rede, no horário escolhido (padrão
+**14h**). Ao contrário do teste de velocidade, roda **de tarde de propósito**: de
+madrugada metade dos aparelhos da casa está dormindo e não responde nem ao ARP, e
+a lista sairia mentindo por omissão. Custa poucos segundos de CPU e não satura
+link nenhum.
+
+Sem rede escolhida, ela varre **a rede de casa** (o link `kind='lan'`) — as redes
+das operadoras só têm o roteador delas e o próprio Pi, e não é sobre elas que se
+pergunta "quem entrou aqui?". Se a rede gravada sumir com uma troca de placa, o
+agendador cai de volta para a LAN em vez de travar.
+
+### Novo na semana ≠ novo nesta varredura
+
+São duas coisas diferentes e a distinção é o que faz o destaque valer:
+
+| Marca | O que quer dizer |
+|---|---|
+| `novo` — *estreou agora* | apareceu **nesta** varredura e some na próxima |
+| `novo_semana` — **ouro** | chegou nos **últimos 7 dias**; é o que se quer ver de relance |
+| `fundador` | já estava aqui quando o netmon começou a olhar — **nunca** é novidade |
+
+O `fundador` existe porque sem ele a primeira varredura pintaria a casa inteira
+de ouro: todo aparelho conhecido teria `primeiro` recente. "Novidade" é por
+**rede**, não global — a primeira varredura de uma rede cadastra 13 aparelhos de
+uma vez, e anunciar 13 novos seria ruído. `scan.migrar_fundadores()` roda uma vez
+no boot e marca quem já estava cadastrado antes desta ideia existir.
+
+O `novo_semana` é **recalculado a cada leitura**, nunca guardado junto do retrato
+da varredura: ele depende da hora atual e envelheceria errado dentro do JSON.
+
+### O log das varreduras
+
+`scan:ultimo:*` na `meta` guarda só o **último retrato** de cada rede,
+sobrescrito toda vez. A tabela `scans` é o que sobra dele: quando rodou, se foi
+você ou o agendador, quantos aparelhos achou, quanto levou, e **quem apareceu**
+naquele dia — com nome e fabricante congelados, porque daqui a um mês o retrato
+já foi substituído. Aparece na página (Aparelhos na rede → Log das varreduras),
+no PDF e no pacote de diagnóstico.
+
 ## A página
 
 **Toda seção recolhe no clique do título**, e o estado fica no navegador de quem
@@ -283,9 +337,12 @@ Ao reabrir, o desenho tem que ser refeito, senão aparece na escala errada.
 ## O período manda em tudo
 
 O seletor de período era um detalhe dentro do painel de latência, e parecia
-mandar só ali. Agora é um **bloco próprio no alto da página**, e tudo o que vem
-abaixo — latência, perda, estatísticas, linha do tempo e o histórico de quedas —
-fala da mesma janela:
+mandar só ali. Agora é um **bloco próprio, o primeiro da página — antes até dos
+cartões dos links** — e tudo o que fala de tempo (latência, perda, estatísticas,
+linha do tempo e o histórico de quedas) fala da mesma janela. Ele vem antes dos
+cartões porque é a pergunta que se faz primeiro: *de que pedaço de tempo estamos
+falando?* Os cartões continuam sendo o estado de **agora** — só o resumo de
+quedas dentro do bloco segue o período:
 
 `ao vivo` · `1 min` · `10 min` · `30 min` · `1 h` · `2 h` · `24 h` · `2 dias` ·
 `7 dias` · `30 dias` · `tudo`
@@ -342,11 +399,64 @@ desconhecido" no cache permanente, que é pior do que não ter consultado.
 Nesta rede **nem PTR, nem NetBIOS, nem mDNS respondem** (foi testado). Por isso o
 nome do aparelho é um **apelido que você dá**, clicando no nome na tabela: fica
 guardado pelo MAC, sobrevive à troca de IP e não se perde no reset do histórico.
-Quem aparece pela primeira vez ganha a marca **novo na rede** — e a data em que
-foi visto pela primeira vez fica na última coluna.
+Quem chegou nos últimos 7 dias fica **destacado em ouro**, com etiqueta escrita
+e a idade em texto ao lado da data — a cor nunca vai sozinha, senão a informação
+se perde na impressão em preto-e-branco e para quem não distingue amarelo. A data
+da primeira vez em que o aparelho foi visto fica na última coluna.
+
+O botão **📄 Salvar em PDF** gera o inventário da rede: resumo (quantos
+aparelhos, por cabo, por Wi-Fi, quantos novos na semana), a tabela inteira com os
+novos destacados e uma página final com o log das varreduras.
 
 Uma varredura de /24 leva ~7 s com o cache de fabricantes quente (a primeira,
 com MACs novos, chega a 20 s por causa do limite de 1 consulta por segundo).
+
+## O gráfico de latência
+
+Era linha de 2 px sobre uma faixa mín–máx, em 280 px de altura, e mais nada: com
+os três links marcando entre 0,3 e 4 ms, as linhas se empilhavam numa faixa de
+poucos pixels e saber quanto cada um marcava **agora** exigia passar o mouse.
+Mudou de tamanho e de modelo:
+
+- **400 px de altura** (280 no celular) — a faixa mín–máx precisa de espaço para
+  existir;
+- **área com degradê** sob cada linha: o volume separa os links de relance,
+  coisa que duas linhas encostadas não fazem;
+- **rótulo direto na ponta direita**, com o nome do link e o valor de agora. São
+  três séries, então cada uma é rotulada: a identidade nunca depende só da cor.
+  Quando dois valores quase coincidem — e coincidem quase sempre — os rótulos se
+  empurram para não se sobrepor. Em tela estreita eles não cabem e a legenda do
+  topo volta a ser a única;
+- **marcador na última medida**, com anel da cor do fundo, senão dois pontos
+  encostados viram uma mancha só;
+- **linha tracejada no limiar de latência alta**, para o número ter régua — mas
+  só quando ela cabe na escala atual. Esticar o eixo até 80 ms para mostrar a
+  régua achataria contra o chão os 4 ms do dia a dia;
+- **grade só horizontal**: as verticais competiam com as próprias linhas de dados
+  agora que há área pintada;
+- **suavização monótona (Hermite)** quando os pontos são esparsos. Monótona
+  porque a spline ingênua "estoura" a curva entre dois pontos e desenha uma
+  latência que nunca foi medida. Em janela ao vivo, com um ponto a cada 2 s, não
+  há o que suavizar e o custo não se paga — a suavização só entra abaixo de um
+  ponto a cada 6 px.
+
+### O ROTEADOR mudou de cor, e não foi gosto
+
+O link de LAN era violeta (`#a98bff`) e a GIGA é azul (`#4da3ff`). Passando as
+duas pelo simulador de daltonismo (Machado–Oliveira–Fernandes, severidade 1,0) e
+medindo a distância em OKLab ×100:
+
+| Par | Visão normal | Protanopia | Deuteranopia |
+|---|---|---|---|
+| GIGA × ROTEADOR **antes** (`#a98bff`) | 11,5 | 3,6 | **1,5** |
+| GIGA × ROTEADOR **agora** (`#37d6d6`) | 16,8 | 20,9 | **15,9** |
+
+O piso é 15 para visão normal e 8 sob simulação. As duas linhas eram
+**literalmente a mesma cor** para quem tem deuteranopia, e mesmo com visão normal
+ficavam abaixo do piso — num gráfico onde elas se cruzam o tempo todo. O ciano
+abre as duas e ainda fica a 13,4 do verde de "no ar", que é o vizinho perigoso
+seguinte. A troca vale na página inteira: cards, legenda, linha do tempo e
+gráfico usam a mesma constante.
 
 ## Perda de pacotes não é gráfico
 
@@ -471,10 +581,12 @@ roteamento continua exatamente como estava.
 | `GET /api/scan?rede=` | redes que dá para varrer, a última varredura e os apelidos guardados |
 | `POST /api/scan` | varre: `{"rede":"eth0\|192.168.200.0/24","portas":"rapido"}` — `409` se já houver uma |
 | `POST /api/scan/nome` | batiza um aparelho: `{"mac":"d4:0d:ab:46:4b:cc","nome":"TV da sala"}` |
+| `GET /api/scan/log?limit=&rede=` | histórico das varreduras, com quem apareceu em cada uma |
+| `GET /api/scan.pdf?rede=` | inventário dos aparelhos em PDF, com os novos da semana destacados |
 | `GET /api/alvos` | para onde cada sonda aponta e o estado de cada servidor DNS da LAN |
 | `GET /api/mesh` | estado do Meshnet, pares, e por qual link o túnel está saindo |
 | `POST /api/mesh` | liga/desliga: `{"meshnet":true}` — desligar exige `{"confirmar":"DESLIGAR"}` |
-| `GET /api/config` · `POST /api/config` | limiares, webhook, som, teste de velocidade automático |
+| `GET /api/config` · `POST /api/config` | limiares, webhook, som, teste de velocidade automático, varredura automática |
 | `GET /api/links` | links, a placa de cada um e todas as placas do sistema |
 | `POST /api/links` | troca a placa (e o alvo do link LAN) ao vivo: `{"links":{"GIGA":{"iface":"eth0"}}}` |
 | `GET /api/ifaces` | só as placas de rede, com IP, gateway, USB e estado do cabo |
@@ -512,7 +624,7 @@ trace.py      traceroute próprio, sem root e sem o binário `traceroute`
 mesh.py       estado e liga/desliga do NordVPN Meshnet
 scan.py       varredura da rede local (ICMP + ARP + portas + fabricante)
 pdf.py        escritor de PDF 1.4 feito à mão
-report.py     montagem do relatório
+report.py     montagem do relatório de quedas e do inventário da rede
 run.sh              lock de instância única + watchdog
 configurar-rede.sh  papéis de rede por gateway (dispatcher do NetworkManager)
 static/       index.html, app.js, style.css
@@ -520,6 +632,12 @@ static/       index.html, app.js, style.css
 
 ## Detalhes que custaram caro para descobrir
 
+- **O relógio deste aparelho está em UTC e o usuário não.** `time.localtime()`
+  aqui devolve UTC: qualquer agendamento feito com ele sai **3 horas antes** do
+  que a configuração diz, e a página, que formata no fuso do navegador, mostra o
+  horário errado e parece um agendador quebrado. Passe sempre por
+  `netmon._agora()` (`alerts.TZ`). Levou três dias de teste de velocidade às 1h
+  para alguém reparar.
 - Os alvos de ping são `8.8.8.8` e `9.9.9.9`, **de donos diferentes de
   propósito**: o segundo só entra quando o primeiro some por completo, e usar o
   mesmo dono nos dois faria uma queda da Google parecer queda do link. O

@@ -97,6 +97,26 @@ CREATE TABLE IF NOT EXISTS speedtests (
 );
 CREATE INDEX IF NOT EXISTS idx_speed ON speedtests(link_id, ts DESC);
 
+-- Log das varreduras da rede. A `meta` guarda so o RETRATO da ultima
+-- varredura de cada rede (sobrescrito toda vez); aqui fica o historico: quando
+-- rodou, se foi o usuario ou o agendador, quantos aparelhos achou e quais
+-- apareceram pela primeira vez. E o que responde "desde quando esse aparelho
+-- esta aqui?" e "a varredura das 14h rodou ontem?".
+CREATE TABLE IF NOT EXISTS scans (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts         INTEGER NOT NULL,
+  rede_id    TEXT NOT NULL,
+  rotulo     TEXT,
+  origem     TEXT NOT NULL DEFAULT 'manual',
+  modo_portas TEXT,
+  total      INTEGER NOT NULL DEFAULT 0,
+  n_novos    INTEGER NOT NULL DEFAULT 0,
+  novos      TEXT,
+  duracao_s  INTEGER,
+  erro       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_scans ON scans(ts DESC);
+
 CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -118,7 +138,18 @@ DEFAULT_CONFIG = {
     "auto_speed_enabled": "1",
     "auto_speed_hora": "04:00",
     "auto_speed_dur": "5",
+    # Varredura automatica da rede: todo dia as 14h. De DIA de proposito -- de
+    # madrugada metade dos aparelhos da casa esta dormindo e nem ARP responde,
+    # e o retrato sairia mentindo por omissao. Rede vazia = a rede de casa (LAN).
+    "auto_scan_enabled": "1",
+    "auto_scan_hora": "14:00",
+    "auto_scan_portas": "rapido",
+    "auto_scan_rede": "",
 }
+
+# Janela do destaque "aparelho novo": uma semana. Vive aqui porque a pagina, o
+# PDF e o log tem de concordar sobre o que e "novo na semana".
+NOVO_JANELA_S = 7 * 86400
 
 # A identidade de cada link e a INTERFACE, nunca um IP: o gateway e o endereco
 # sao redetectados em runtime, entao trocar o cabo de rede nao quebra nada.
@@ -280,6 +311,22 @@ def get_meta(key, padrao=None):
             return json.loads(r["value"])
         except ValueError:
             return r["value"]
+    finally:
+        conn.close()
+
+
+def list_meta_prefix(prefixo):
+    """{chave: valor} de todas as metas com aquele prefixo."""
+    conn = connect(readonly=True)
+    try:
+        saida = {}
+        for r in conn.execute("SELECT key,value FROM meta WHERE key LIKE ?",
+                              (prefixo + "%",)):
+            try:
+                saida[r["key"]] = json.loads(r["value"])
+            except ValueError:
+                saida[r["key"]] = r["value"]
+        return saida
     finally:
         conn.close()
 
@@ -481,6 +528,50 @@ def list_speedtests(link_id=None, limit=20):
         conn.close()
 
 
+# --------------------------------------------------------------------------
+# Log das varreduras da rede
+# --------------------------------------------------------------------------
+def add_scan(rede_id, rotulo, origem, modo_portas, total, novos, duracao_s, erro):
+    """Uma linha por varredura. `novos` e a lista de aparelhos inéditos."""
+    with _links_lock:
+        conn = connect()
+        try:
+            cur = conn.execute(
+                "INSERT INTO scans(ts,rede_id,rotulo,origem,modo_portas,total,"
+                "n_novos,novos,duracao_s,erro) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (int(time.time()), rede_id, rotulo, origem, modo_portas,
+                 int(total or 0), len(novos or []),
+                 json.dumps(novos or [], ensure_ascii=False),
+                 None if duracao_s is None else int(duracao_s), erro))
+            conn.commit()
+            return cur.lastrowid
+        finally:
+            conn.close()
+
+
+def list_scans(limit=100, rede_id=None):
+    conn = connect(readonly=True)
+    try:
+        sql = "SELECT * FROM scans"
+        params = []
+        if rede_id:
+            sql += " WHERE rede_id=?"
+            params.append(rede_id)
+        sql += " ORDER BY ts DESC LIMIT ?"
+        params.append(int(limit))
+        saida = []
+        for r in conn.execute(sql, params):
+            d = dict(r)
+            try:
+                d["novos"] = json.loads(d["novos"] or "[]")
+            except ValueError:
+                d["novos"] = []
+            saida.append(d)
+        return saida
+    finally:
+        conn.close()
+
+
 def last_speedtests():
     """Ultimo teste util de cada link, para a pagina abrir ja preenchida.
 
@@ -645,11 +736,13 @@ def reset(escopo="historico"):
     """
     conn = connect()
     try:
-        for tabela in ("samples", "agg_minute", "agg_hour", "events", "speedtests"):
+        for tabela in ("samples", "agg_minute", "agg_hour", "events",
+                       "speedtests", "scans"):
             conn.execute("DELETE FROM %s" % tabela)
         try:
             conn.execute(
-                "DELETE FROM sqlite_sequence WHERE name IN ('events','speedtests')")
+                "DELETE FROM sqlite_sequence WHERE name IN "
+                "('events','speedtests','scans')")
         except sqlite3.Error:
             pass                      # a tabela so existe se ja houve AUTOINCREMENT
         conn.execute("DELETE FROM meta WHERE key LIKE 'ip_externo:%'")

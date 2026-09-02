@@ -2,10 +2,15 @@
    justamente quando a internet cair. */
 'use strict';
 
-const CORES = { GIGA: '#4da3ff', IMPACTO: '#ff7a45', ROTEADOR: '#a98bff' };
+/* O ROTEADOR era violeta (#a98bff) e o azul da GIGA (#4da3ff) ficava a ΔE 1,5
+   dele para quem tem deuteranopia — as duas linhas do gráfico eram literalmente
+   a mesma cor, e mesmo com visão normal a distância (ΔE 11,5) ficava abaixo do
+   piso de 15. O ciano abre as duas: ΔE 16,8 normal e 15,9 sob simulação, e
+   ainda fica longe do verde de "no ar". */
+const CORES = { GIGA: '#4da3ff', IMPACTO: '#ff7a45', ROTEADOR: '#37d6d6' };
 /* Um link novo (outra operadora, outra placa) não pode sair sem cor: a paleta
    entra pela ordem em que o back-end devolve os links. */
-const PALETA = ['#4da3ff', '#ff7a45', '#a98bff', '#2ecc71', '#e0b52e'];
+const PALETA = ['#4da3ff', '#ff7a45', '#37d6d6', '#c8e04d', '#f78fb3'];
 const corLink = (nome) =>
   CORES[nome] || PALETA[Math.max(0, nomesLinks().indexOf(nome)) % PALETA.length];
 
@@ -52,8 +57,10 @@ const estado = {
   vel: { ultimos: {}, historico: {}, rodando: null, log: [] },
   trace: {},
   ifaces: [],
+  cfgScanRede: '',
   cfgLinks: [],
-  scan: { redes: [], rede: null, ultimo: null, rodando: null, conhecidos: {} },
+  scan: { redes: [], rede: null, ultimo: null, rodando: null, conhecidos: {},
+          log: [], auto: null },
   timers: {},
 };
 
@@ -678,11 +685,100 @@ function faixaSemDados(svg, series, X, M, ih, t0, t1, comTexto) {
   }
 }
 
-/* ------------------------------------------------------------ latência */
+/* ------------------------------------------------------------ latência
+   O gráfico ficou maior e mudou de modelo. Antes era linha fina sobre uma
+   faixa mín–máx e mais nada: para saber quanto cada link está marcando agora
+   era preciso passar o mouse, e a legenda no topo obrigava a ir e voltar entre
+   a cor e o nome. Agora:
+
+     · área com degradê sob cada linha — o volume separa os links de relance,
+       coisa que duas linhas de 2px encostadas não fazem;
+     · rótulo direto na ponta direita, com o nome do link e o valor de agora,
+       de modo que a identidade nunca dependa só da cor;
+     · marcador na última medida, que é onde o olho procura primeiro;
+     · linha tracejada no limiar de latência alta, para o número ter régua.
+
+   A faixa mín–máx continua: ela é o que mostra que 4 ms de média esconderam
+   um pico de 300 ms dentro do intervalo. */
+
+/* Quebra a série nos buracos. Um link que ficou 20 min fora não pode virar uma
+   reta atravessando o gráfico como se tivesse respondido o tempo todo. */
+function segmentos(pts, ...campos) {
+  const fora = [];
+  let atual = null;
+  pts.forEach((p) => {
+    // a faixa exige mínimo E máximo: com só um dos dois, `Y(null)` daria zero
+    // e a faixa desceria até o chão desenhando uma perda que não houve
+    if (campos.some((c) => p[c] === null || p[c] === undefined)) { atual = null; return; }
+    if (!atual) { atual = []; fora.push(atual); }
+    atual.push(p);
+  });
+  return fora;
+}
+
+/* Hermite monótona: suaviza sem inventar picos que não existem nos dados
+   (a spline ingênua "estoura" a curva entre dois pontos e desenha uma latência
+   que nunca foi medida). Só entra quando os pontos são esparsos — em 30 dias
+   cada ponto é uma hora e a linha reta fica em ziguezague; ao vivo, com um
+   ponto a cada 2 s, não há o que suavizar e o custo não se paga. */
+function caminhoSuave(pontos) {
+  const n = pontos.length;
+  if (n < 3) return pontos.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+  const dx = [], dy = [], m = [];
+  for (let i = 0; i < n - 1; i++) {
+    dx.push(pontos[i + 1][0] - pontos[i][0]);
+    dy.push(pontos[i + 1][1] - pontos[i][1]);
+  }
+  const s = dx.map((d, i) => (d ? dy[i] / d : 0));
+  m.push(s[0]);
+  for (let i = 1; i < n - 1; i++) {
+    m.push(s[i - 1] * s[i] <= 0 ? 0 : (s[i - 1] + s[i]) / 2);
+  }
+  m.push(s[n - 2]);
+  for (let i = 0; i < n - 1; i++) {
+    if (s[i] === 0) { m[i] = 0; m[i + 1] = 0; continue; }
+    const a = m[i] / s[i], b = m[i + 1] / s[i];
+    const h = Math.hypot(a, b);
+    if (h > 3) { m[i] = (3 / h) * a * s[i]; m[i + 1] = (3 / h) * b * s[i]; }
+  }
+  let d = 'M' + pontos[0][0].toFixed(1) + ' ' + pontos[0][1].toFixed(1);
+  for (let i = 0; i < n - 1; i++) {
+    const t = dx[i] / 3;
+    d += ' C' + (pontos[i][0] + t).toFixed(1) + ' ' + (pontos[i][1] + m[i] * t).toFixed(1)
+       + ' ' + (pontos[i + 1][0] - t).toFixed(1) + ' ' + (pontos[i + 1][1] - m[i + 1] * t).toFixed(1)
+       + ' ' + pontos[i + 1][0].toFixed(1) + ' ' + pontos[i + 1][1].toFixed(1);
+  }
+  return d;
+}
+
+function caminho(pontos, suave) {
+  if (!pontos.length) return '';
+  if (!suave) {
+    return pontos.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+  }
+  return caminhoSuave(pontos);
+}
+
+/* Os rótulos da ponta direita se empilham quando dois links marcam quase o
+   mesmo valor — e eles marcam, quase sempre. Empurra um de cada vez até
+   caberem, sem sair da área do gráfico. */
+function arrumarRotulos(itens, topo, base, altura) {
+  itens.sort((a, b) => a.y - b.y);
+  for (let i = 1; i < itens.length; i++) {
+    if (itens[i].y - itens[i - 1].y < altura) itens[i].y = itens[i - 1].y + altura;
+  }
+  const excesso = itens.length ? itens[itens.length - 1].y - base : 0;
+  if (excesso > 0) for (const it of itens) it.y = Math.max(topo, it.y - excesso);
+  return itens;
+}
+
 function desenharLatencia(series, eventos, t0, t1) {
   const svg = $('g-lat');
-  const { W, H } = medir(svg, 900, 280);
-  const M = { t: 12, r: 14, b: 26, l: W < 420 ? 36 : 48 };   // eixo mais enxuto no celular
+  const { W, H } = medir(svg, 900, 400);
+  // a direita deixa de ser só respiro: é onde moram os rótulos diretos. Em
+  // tela estreita eles não cabem e a legenda do topo volta a ser a única
+  const comRotulos = W >= 560;
+  const M = { t: 16, r: comRotulos ? 96 : 14, b: 28, l: W < 420 ? 38 : 52 };
   limpar(svg);
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   const iw = W - M.l - M.r, ih = H - M.t - M.b;
@@ -693,7 +789,18 @@ function desenharLatencia(series, eventos, t0, t1) {
   ymax *= 1.12;
 
   const X = (t) => M.l + ((t - t0) / Math.max(1, t1 - t0)) * iw;
-  const Y = (v) => M.t + ih - (v / ymax) * ih;
+  const Y = (v) => M.t + ih - (Math.min(v, ymax) / ymax) * ih;
+
+  // um <defs> por desenho: o degradê de cada link precisa da cor dele, e o id
+  // some junto com o resto do SVG a cada redesenho
+  const defs = svgEl('defs', {});
+  nomesLinks().forEach((nome, i) => {
+    const g = svgEl('linearGradient', { id: 'grad' + i, x1: 0, y1: 0, x2: 0, y2: 1 });
+    g.appendChild(svgEl('stop', { offset: '0%', 'stop-color': corLink(nome), 'stop-opacity': .34 }));
+    g.appendChild(svgEl('stop', { offset: '100%', 'stop-color': corLink(nome), 'stop-opacity': .02 }));
+    defs.appendChild(g);
+  });
+  svg.appendChild(defs);
 
   faixaSemDados(svg, series, X, M, ih, t0, t1, true);
 
@@ -707,51 +814,102 @@ function desenharLatencia(series, eventos, t0, t1) {
     }));
   });
 
-  // grade + eixo Y
+  // grade recessiva: só as horizontais. As verticais competiam com as próprias
+  // linhas de dados num gráfico que agora tem área pintada
   ticksY(ymax).forEach((v) => {
-    svg.appendChild(svgEl('line', { x1: M.l, x2: W - M.r, y1: Y(v), y2: Y(v), stroke: v === 0 ? '#3b4d70' : '#26334a', 'stroke-width': 1 }));
-    const tx = svgEl('text', { x: M.l - 8, y: Y(v) + 4, 'text-anchor': 'end', fill: '#93a3c0', 'font-size': 11 });
+    svg.appendChild(svgEl('line', {
+      x1: M.l, x2: W - M.r, y1: Y(v), y2: Y(v),
+      stroke: v === 0 ? '#4a4a46' : '#2e2e2c', 'stroke-width': 1 }));
+    const tx = svgEl('text', { x: M.l - 9, y: Y(v) + 4, 'text-anchor': 'end', fill: '#a5a39c', 'font-size': 11 });
     tx.textContent = nf(v, v < 10 ? 1 : 0);
     svg.appendChild(tx);
   });
-  const un = svgEl('text', { x: M.l - 8, y: M.t - 2, 'text-anchor': 'end', fill: '#93a3c0', 'font-size': 10 });
+  const un = svgEl('text', { x: M.l - 9, y: M.t - 3, 'text-anchor': 'end', fill: '#a5a39c', 'font-size': 10 });
   un.textContent = 'ms';
   svg.appendChild(un);
+
+  // régua do limiar: só aparece se couber na escala atual. Esticar o eixo até
+  // 80 ms para mostrar a linha achataria contra o chão os 4 ms do dia a dia
+  const lim = estado.limiares.lat;
+  if (lim > 0 && lim < ymax * 0.97) {
+    svg.appendChild(svgEl('line', {
+      x1: M.l, x2: W - M.r, y1: Y(lim), y2: Y(lim), stroke: STATUS.warning,
+      'stroke-width': 1, 'stroke-dasharray': '5 4', opacity: .55 }));
+    const tl = svgEl('text', { x: W - M.r - 6, y: Y(lim) - 5, 'text-anchor': 'end',
+                               fill: STATUS.warning, 'font-size': 10, opacity: .9 });
+    tl.textContent = `latência alta · ${nf(lim, 0)} ms`;
+    svg.appendChild(tl);
+  }
 
   // eixo X
   const nX = Math.max(2, Math.min(7, Math.floor(iw / 120)));
   for (let i = 0; i <= nX; i++) {
     const t = t0 + ((t1 - t0) * i) / nX;
-    const tx = svgEl('text', { x: X(t), y: H - 8, 'text-anchor': i === 0 ? 'start' : i === nX ? 'end' : 'middle', fill: '#93a3c0', 'font-size': 11 });
+    const tx = svgEl('text', { x: X(t), y: H - 9, 'text-anchor': i === 0 ? 'start' : i === nX ? 'end' : 'middle', fill: '#a5a39c', 'font-size': 11 });
     tx.textContent = rotuloTempo(t, t1 - t0);
     svg.appendChild(tx);
   }
 
-  // séries: banda min–max + linha da média
-  for (const nome in series) {
+  // séries: faixa mín–máx, área com degradê, linha, e a ponta marcada
+  const rotulos = [];
+  nomesLinks().forEach((nome, i) => {
     const pts = series[nome];
+    if (!pts || !pts.length) return;
     const cor = corLink(nome);
-    let banda = '', volta = [], aberto = false;
-    pts.forEach((p) => {
-      const [ts, avg, mn, mx] = p;
-      if (mn === null || mx === null || mn === undefined || mx === undefined) { aberto = false; return; }
-      banda += (aberto ? 'L' : 'M') + X(ts).toFixed(1) + ' ' + Y(mx).toFixed(1) + ' ';
-      volta.push([X(ts), Y(mn)]);
-      aberto = true;
+    const suave = pts.length < iw / 6;
+
+    segmentos(pts, 2, 3).forEach((seg) => {
+      if (seg.length < 2) return;
+      const alto = seg.map((p) => [X(p[0]), Y(p[3])]);
+      const baixo = seg.map((p) => [X(p[0]), Y(p[2])]).reverse();
+      // as duas bordas da faixa seguem a mesma curva da linha da média: uma
+      // borda suave contra outra angular no mesmo preenchimento fica torta
+      const d = caminho(alto, suave) + ' ' + caminho(baixo, suave).replace(/^M/, 'L') + ' Z';
+      svg.appendChild(svgEl('path', { d, fill: cor, opacity: .13, stroke: 'none' }));
     });
-    if (volta.length > 1) {
-      for (let i = volta.length - 1; i >= 0; i--) banda += 'L' + volta[i][0].toFixed(1) + ' ' + volta[i][1].toFixed(1) + ' ';
-      banda += 'Z';
-      svg.appendChild(svgEl('path', { d: banda, fill: cor, opacity: .16, stroke: 'none' }));
-    }
-    let d = '', ab = false;
-    pts.forEach((p) => {
-      if (p[1] === null || p[1] === undefined) { ab = false; return; }
-      d += (ab ? 'L' : 'M') + X(p[0]).toFixed(1) + ' ' + Y(p[1]).toFixed(1) + ' ';
-      ab = true;
+
+    segmentos(pts, 1).forEach((seg) => {
+      if (!seg.length) return;
+      const linha = seg.map((p) => [X(p[0]), Y(p[1])]);
+      const d = caminho(linha, suave);
+      if (seg.length > 1) {
+        const chao = M.t + ih;
+        svg.appendChild(svgEl('path', {
+          d: d + ` L${linha[linha.length - 1][0].toFixed(1)} ${chao} L${linha[0][0].toFixed(1)} ${chao} Z`,
+          fill: `url(#grad${i})`, stroke: 'none' }));
+      }
+      svg.appendChild(svgEl('path', {
+        d, fill: 'none', stroke: cor, 'stroke-width': 2.2,
+        'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
     });
-    if (d) svg.appendChild(svgEl('path', { d, fill: 'none', stroke: cor, 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
-  }
+
+    // última medida: o ponto que responde "e agora?"
+    const vivos = pts.filter((p) => p[1] !== null && p[1] !== undefined);
+    const fim = vivos[vivos.length - 1];
+    if (!fim) return;
+    const px = X(fim[0]), py = Y(fim[1]);
+    // anel da cor do fundo: sem ele, dois pontos encostados viram uma mancha só
+    svg.appendChild(svgEl('circle', { cx: px, cy: py, r: 5.5, fill: '#0f0f0e', opacity: .85 }));
+    svg.appendChild(svgEl('circle', { cx: px, cy: py, r: 4, fill: cor }));
+    if (comRotulos) rotulos.push({ nome, cor, y: py, valor: fim[1], lan: ehLan(nome) });
+  });
+
+  // rótulo direto na ponta: nome + valor de agora, sem depender da cor
+  arrumarRotulos(rotulos, M.t + 8, M.t + ih - 4, 30).forEach((r) => {
+    const x = W - M.r + 8;
+    const g = svgEl('g', {});
+    g.appendChild(svgEl('rect', {
+      x: x - 4, y: r.y - 15, width: M.r - 10, height: 30, rx: 7,
+      fill: r.cor, opacity: .14 }));
+    g.appendChild(svgEl('rect', { x: x - 4, y: r.y - 15, width: 3, height: 30, rx: 1.5, fill: r.cor }));
+    const n1 = svgEl('text', { x: x + 5, y: r.y - 3, fill: r.cor, 'font-size': 10.5, 'font-weight': 700 });
+    n1.textContent = r.nome + (r.lan ? ' ·' : '');
+    g.appendChild(n1);
+    const n2 = svgEl('text', { x: x + 5, y: r.y + 10, fill: '#e6e5e0', 'font-size': 11.5, 'font-weight': 600 });
+    n2.textContent = nf(r.valor, 1) + ' ms';
+    g.appendChild(n2);
+    svg.appendChild(g);
+  });
 
   ligarCrosshair(svg, $('tt-lat'), $('wrap-lat'), series, X, M, ih, t0, t1, 'ms', 1);
 }
@@ -1531,6 +1689,7 @@ function conectar() {
       // uma varredura falhou seria perder o que já se sabia da rede
       if (d.fase === 'fim') estado.scan.ultimo = d;
       renderScan();
+      carregarLogScan();      // a varredura que acabou de terminar entra no log
       if (d.fase === 'erro') {
         $('sc-msg').textContent = '❌ ' + (d.erro || 'a varredura falhou');
         $('sc-msg').style.color = '#ffb3b3';
@@ -1660,6 +1819,11 @@ async function carregarConfig() {
     $('c-auto-on').checked = c.auto_speed_enabled === '1';
     $('c-auto-hora').value = c.auto_speed_hora || '04:00';
     $('c-auto-dur').value = parseFloat(c.auto_speed_dur) || 5;
+    $('c-scan-on').checked = c.auto_scan_enabled === '1';
+    $('c-scan-hora').value = c.auto_scan_hora || '14:00';
+    $('c-scan-portas').value = c.auto_scan_portas || 'rapido';
+    estado.cfgScanRede = c.auto_scan_rede || '';
+    renderRedesConfig();
     estado.somOn = c.som_habilitado === '1';
     estado.limiares = {
       lat: parseFloat(c.lat_limiar_ms) || 80,
@@ -1681,6 +1845,10 @@ async function salvarConfig() {
     auto_speed_enabled: $('c-auto-on').checked ? '1' : '0',
     auto_speed_hora: $('c-auto-hora').value || '04:00',
     auto_speed_dur: $('c-auto-dur').value,
+    auto_scan_enabled: $('c-scan-on').checked ? '1' : '0',
+    auto_scan_hora: $('c-scan-hora').value || '14:00',
+    auto_scan_portas: $('c-scan-portas').value,
+    auto_scan_rede: $('c-scan-rede').value,
   };
   const msg = $('c-msg');
   try {
@@ -1696,6 +1864,8 @@ async function salvarConfig() {
       jit: parseFloat(j.jitter_limiar_ms) || 60,
     };
     carregarResumo();                 // as cores da tabela seguem os limiares
+    estado.cfgScanRede = j.auto_scan_rede || '';
+    carregarLogScan();                // o aviso do horário agendado é dali
     msg.textContent = '✅ salvo';
     msg.style.color = '#8ef0b6';
   } catch (e) {
@@ -1831,7 +2001,13 @@ function linhaScan(h, modoPortas) {
   const marcas = [];
   if (h.eu) marcas.push('<span class="tag tag-eu">este aparelho</span>');
   if (h.gateway) marcas.push('<span class="tag tag-gw">roteador</span>');
-  if (h.novo) marcas.push('<span class="tag tag-novo">novo na rede</span>');
+  /* Duas novidades diferentes, e a distinção importa. `novo` é "estreou NESTA
+     varredura" e some na próxima. `novo_semana` é "chegou nos últimos 7 dias" e
+     é o que o usuário quer ver de relance — por isso é ele que ganha o ouro.
+     Quem já estava aqui quando o netmon começou a olhar não conta como
+     novidade: foi encontrado, não chegou. */
+  if (h.novo) marcas.push('<span class="tag tag-novo">estreou agora</span>');
+  else if (h.novo_semana) marcas.push(`<span class="tag tag-semana" title="primeira vez visto ${fmtDataHora(h.primeiro_visto)}">✨ novo na semana</span>`);
   if (h.mac_aleatorio && !h.eu) {
     marcas.push('<span class="tag tag-rand" title="MAC administrado localmente: '
       + 'o aparelho sorteia um endereço por rede, então o fabricante não pode ser '
@@ -1845,7 +2021,11 @@ function linhaScan(h, modoPortas) {
         : '<span class="muted">nenhuma aberta entre as olhadas</span>');
   const lat = h.rtt_ms == null ? '<span class="muted">—</span>'
     : `${nf(h.rtt_ms, 2)} ms${h.jitter_ms == null ? '' : ` <small class="muted">±${nf(h.jitter_ms, 2)}</small>`}`;
-  return `<tr class="${h.eu ? 'linha-eu' : ''}${h.novo ? ' linha-nova' : ''}">
+  const desde = h.primeiro_visto
+    ? `${fmtDataHora(h.primeiro_visto)}${h.idade_s != null && h.idade_s < 7 * 86400
+        ? ` <small class="ouro-tx">(há ${fmtDur(h.idade_s)})</small>` : ''}`
+    : '—';
+  return `<tr class="${h.eu ? 'linha-eu' : ''}${h.novo || h.novo_semana ? ' linha-nova' : ''}">
     <td data-rot="Aparelho"><button class="sc-nome" type="button" data-mac="${escTxt(h.mac || '')}"
           title="clique para dar um apelido a este aparelho">${escTxt(nome)}</button>
       ${h.apelido && h.tipo ? `<small class="muted">${escTxt(h.tipo)}</small>` : ''}
@@ -1856,7 +2036,7 @@ function linhaScan(h, modoPortas) {
     <td data-rot="Conexão"><span class="chip-con ${con.cls}" title="${escTxt(h.conexao_motivo || '')}">${con.chip}</span></td>
     <td data-rot="Latência">${lat}</td>
     <td data-rot="Portas abertas" class="cel-portas">${portas}</td>
-    <td data-rot="Conhecido desde">${h.primeiro_visto ? fmtDataHora(h.primeiro_visto) : '—'}</td>
+    <td data-rot="Conhecido desde">${desde}</td>
   </tr>`;
 }
 
@@ -1877,9 +2057,12 @@ function renderScan() {
     } else if (r.fase === 'fim' || !estado.scan.rodando) {
       const wifi = hosts.filter((h) => h.conexao === 'wifi').length;
       const cabo = hosts.filter((h) => h.conexao === 'cabo').length;
+      const novos = hosts.filter((h) => h.novo_semana || h.novo).length;
       msg.innerHTML = `${hosts.length} aparelho(s) em <b>${escTxt(r.rede ? r.rede.cidr : '')}</b>`
         + ` · ${cabo} por cabo, ${wifi} por Wi-Fi`
-        + ` · varredura de ${fmtDataHora(r.ts)}${r.duracao_s ? ` (levou ${r.duracao_s}s)` : ''}`;
+        + (novos ? ` · <b class="ouro-tx">${novos} novo(s) na semana</b>` : '')
+        + ` · varredura de ${fmtDataHora(r.ts)}${r.duracao_s ? ` (levou ${r.duracao_s}s)` : ''}`
+        + (r.origem === 'auto' ? ' <span class="tag tag-auto">agendada</span>' : '');
       msg.style.color = '';
     }
   }
@@ -1902,6 +2085,22 @@ function renderScan() {
   }
 }
 
+/* O <select> da varredura automática só pode ser preenchido depois que
+   /api/scan disser quais redes existem, e a config pode chegar antes dele —
+   por isso os dois chamam esta função e ela aguenta ser chamada cedo. */
+function renderRedesConfig() {
+  const sel = $('c-scan-rede');
+  if (!sel) return;
+  const escolhida = estado.cfgScanRede || '';
+  sel.innerHTML = '<option value="">a rede de casa (LAN), escolhida sozinha</option>'
+    + (estado.scan.redes || []).map((r) =>
+        `<option value="${escTxt(r.id)}">${escTxt(r.rotulo)}</option>`).join('');
+  sel.value = escolhida;
+  // rede gravada que sumiu (troca de placa): o back-end cai de volta para a
+  // LAN, e o campo tem de dizer isso em vez de mostrar uma escolha que não vale
+  if (sel.value !== escolhida) sel.value = '';
+}
+
 function renderRedes() {
   const sel = $('sc-rede');
   if (!sel) return;
@@ -1920,8 +2119,61 @@ async function carregarScan(rede) {
     estado.scan.ultimo = r.ultimo || null;
     estado.scan.rodando = r.rodando || null;
     renderRedes();
+    renderRedesConfig();
     renderScan();
   } catch (e) { console.error('varredura', e); }
+}
+
+/* O log é o que sobrevive ao retrato: `scan:ultimo:*` guarda só a varredura
+   mais recente de cada rede, sobrescrita toda vez. Aqui fica o histórico —
+   inclusive a prova de que a varredura agendada rodou ontem. */
+function renderLogScan() {
+  const tb = $('tab-scanlog') && $('tab-scanlog').querySelector('tbody');
+  if (!tb) return;
+  const lista = estado.scan.log || [];
+  tb.innerHTML = lista.length ? lista.map((v) => {
+    const quem = (v.novos || []).map((n) =>
+      `<span class="porta" title="${escTxt(n.mac || '')} · ${escTxt(n.ip || '')}">${
+        escTxt(n.nome || n.vendor || n.mac || '?')}</span>`).join('') || '<span class="muted">—</span>';
+    return `<tr class="${v.n_novos ? 'linha-nova' : ''}">
+      <td data-rot="Quando">${fmtDataHora(v.ts)}</td>
+      <td data-rot="Origem"><span class="tag ${v.origem === 'auto' ? 'tag-auto' : 'tag-manual'}">${
+        v.origem === 'auto' ? 'agendada' : 'manual'}</span></td>
+      <td data-rot="Rede">${escTxt(v.rotulo || v.rede_id)}</td>
+      <td data-rot="Aparelhos">${v.erro ? '<span class="muted">—</span>' : v.total}</td>
+      <td data-rot="Novos">${v.n_novos ? `<b class="ouro-tx">${v.n_novos}</b>` : '<span class="muted">0</span>'}</td>
+      <td data-rot="Duração">${v.duracao_s == null ? '—' : v.duracao_s + 's'}</td>
+      <td data-rot="Quem apareceu" class="cel-portas">${
+        v.erro ? `<span class="erro-tx">falhou: ${escTxt(v.erro)}</span>` : quem}</td>
+    </tr>`;
+  }).join('')
+    : '<tr><td colspan="7" class="muted vazio">Nenhuma varredura registrada ainda.</td></tr>';
+
+  const info = $('scanlog-info');
+  if (info) {
+    const auto = estado.scan.auto || {};
+    info.innerHTML = `${lista.length} varredura(s) no histórico · `
+      + (auto.ligado
+          ? `varredura automática <b>ligada</b>, todo dia às <b>${escTxt(auto.hora || '')}</b>`
+            + (auto.ultima ? ` · última rodada em ${escTxt(auto.ultima)}` : '')
+          : 'varredura automática <b>desligada</b>');
+  }
+  const av = $('sc-auto');
+  if (av) {
+    const auto = estado.scan.auto || {};
+    av.innerHTML = auto.ligado
+      ? `🕑 Varredura automática todo dia às <b>${escTxt(auto.hora || '')}</b> (horário de Brasília).`
+      : '🕑 Varredura automática desligada — ligue em Configurações para ter um retrato por dia.';
+  }
+}
+
+async function carregarLogScan() {
+  try {
+    const r = await pegar('/api/scan/log?limit=100');
+    estado.scan.log = r.scans || [];
+    estado.scan.auto = r.auto || null;
+    renderLogScan();
+  } catch (e) { console.error('log da varredura', e); }
 }
 
 async function rodarScan() {
@@ -2066,6 +2318,11 @@ function ligarEventos() {
   $('btn-reset-ok').addEventListener('click', resetar);
 
   liga('sc-rodar', 'click', rodarScan);
+  liga('sc-pdf', 'click', (ev) => {
+    const rede = $('sc-rede') ? $('sc-rede').value : '';
+    baixar('/api/scan.pdf' + (rede ? '?rede=' + encodeURIComponent(rede) : ''),
+           'aparelhos-na-rede.pdf', 'Inventário da rede', ev.currentTarget);
+  });
   liga('sc-rede', 'change', () => carregarScan($('sc-rede').value));
   liga('tab-scan', 'click', (ev) => {
     const b = ev.target.closest('.sc-nome');
@@ -2161,7 +2418,7 @@ async function iniciar() {
   } catch (e) { console.error(e); }
   await Promise.all([carregarGraficos(), carregarResumo(), carregarEventos(),
                      carregarVelocidade(), carregarTrace(), carregarAlvos(),
-                     carregarMesh(), carregarScan()]);
+                     carregarMesh(), carregarScan(), carregarLogScan()]);
   conectar();
   if (!secaoRecolhida('Configurações e alertas')) carregarIfaces();
   setInterval(relogio, 1000);

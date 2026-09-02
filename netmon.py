@@ -80,17 +80,39 @@ def broadcaster(app):
         stop.wait(BROADCAST_EVERY)
 
 
-def _hora_config():
-    """(hora, minuto) de `auto_speed_hora`, ou None se estiver invalida."""
-    txt = (db.get_config().get("auto_speed_hora") or "").strip()
+# ---------------------------------------------------------------------------
+# Agendadores
+#
+# ARMADILHA JA PAGA UMA VEZ: este aparelho roda em UTC (`timedatectl` diz
+# Etc/UTC) e o usuario vive em America/Sao_Paulo. `time.localtime()` aqui
+# devolve UTC, entao "as 4h" virava 04:00 UTC = 01:00 de Brasilia -- o teste
+# de velocidade saia tres horas antes todo dia, e a pagina, que formata no
+# fuso do NAVEGADOR, mostrava 01:00 e parecia nao obedecer o horario.
+# Todo horario agendado passa por `_agora()`, que usa o mesmo fuso do painel,
+# do log e do relatorio (alerts.TZ). Nunca use time.localtime() aqui.
+# ---------------------------------------------------------------------------
+def _agora():
+    """Agora no fuso do usuario (America/Sao_Paulo), nao no do sistema."""
+    return datetime.now(alerts_mod.TZ)
+
+
+def _hora_config(chave, padrao=None):
+    """(hora, minuto) da config `chave`, ou `padrao` se estiver invalida."""
+    txt = (db.get_config().get(chave) or "").strip()
     try:
         h, _, m = txt.partition(":")
         h, m = int(h), int(m or 0)
     except ValueError:
-        return None
+        return padrao
     if 0 <= h <= 23 and 0 <= m <= 59:
         return (h, m)
-    return None
+    return padrao
+
+
+def _passou_do_horario(agora, alvo):
+    """Ja deu o horario de hoje? Depois, e nao antes: se o aparelho estava
+    desligado na hora marcada, a tarefa sai quando ele voltar."""
+    return (agora.hour, agora.minute) >= alvo
 
 
 def agendador_velocidade(app):
@@ -110,14 +132,12 @@ def agendador_velocidade(app):
         try:
             cfg = db.get_config()
             if cfg.get("auto_speed_enabled") == "1":
-                alvo = _hora_config()
-                agora = time.localtime()
-                hoje = time.strftime("%Y-%m-%d", agora)
-                if alvo and db.get_meta("auto_speed_ultima") != hoje:
-                    # so dispara DEPOIS do horario, e nao antes: se o aparelho
-                    # estava desligado as 4h, o teste sai quando ele voltar
-                    if (agora.tm_hour, agora.tm_min) >= alvo:
-                        _rodar_auto(app, cfg, hoje)
+                alvo = _hora_config("auto_speed_hora")
+                agora = _agora()
+                hoje = agora.strftime("%Y-%m-%d")
+                if (alvo and db.get_meta("auto_speed_ultima") != hoje
+                        and _passou_do_horario(agora, alvo)):
+                    _rodar_auto(app, cfg, hoje)
         except Exception:
             log.exception("falha no agendador do teste de velocidade")
         stop.wait(60)
@@ -141,6 +161,80 @@ def _rodar_auto(app, cfg, hoje):
         except Exception as exc:
             log.warning("teste automatico de %s falhou: %s", nome, exc)
         app["stop"].wait(10)          # folga entre os dois links
+
+
+def agendador_varredura(app):
+    """Varredura da rede de casa, uma vez por dia, no horario escolhido.
+
+    Diferente do teste de velocidade, esta tarefa roda DE DIA de proposito: ela
+    so existe para dizer quem esta ligado na rede, e de madrugada metade da casa
+    esta desligada -- celular dormindo nao responde nem ARP. As 14h a casa esta
+    acordada e o retrato e util.
+
+    Custa pouco: um ARP sweep de /24 e uns segundos de CPU, sem saturar link
+    nenhum. E o que alimenta o destaque de "aparelho novo na semana".
+    """
+    stop = app["stop"]
+    stop.wait(150)                    # depois das sondas e do agendador de velocidade
+    while not stop.is_set():
+        try:
+            cfg = db.get_config()
+            if cfg.get("auto_scan_enabled") == "1":
+                alvo = _hora_config("auto_scan_hora", (14, 0))
+                agora = _agora()
+                hoje = agora.strftime("%Y-%m-%d")
+                if (alvo and db.get_meta("auto_scan_ultima") != hoje
+                        and _passou_do_horario(agora, alvo)):
+                    _rodar_varredura(app, cfg, hoje)
+        except Exception:
+            log.exception("falha no agendador da varredura da rede")
+        stop.wait(60)
+
+
+def _rede_automatica(app, cfg):
+    """Qual rede varrer sozinho.
+
+    O padrao e a rede de casa (o link kind='lan'): as redes das operadoras tem
+    so o roteador delas e o proprio Pi, e nao e sobre elas que a pergunta
+    "quem entrou na minha rede?" e feita. Se o usuario escolher outra em
+    Configuracoes, manda a escolha dele -- desde que a rede ainda exista.
+    """
+    import scan as scan_mod
+    redes = scan_mod.redes(app)
+    if not redes:
+        return None
+    escolhida = (cfg.get("auto_scan_rede") or "").strip()
+    if escolhida:
+        for r in redes:
+            if r["id"] == escolhida:
+                return r["id"]
+        log.warning("rede %s da varredura automatica sumiu; caindo para a LAN",
+                    escolhida)
+    for r in redes:
+        if r.get("kind") == "lan":
+            return r["id"]
+    return redes[0]["id"]
+
+
+def _rodar_varredura(app, cfg, hoje):
+    import scan as scan_mod
+    modo = cfg.get("auto_scan_portas") or "rapido"
+    if modo not in ("nenhuma", "rapido", "completo"):
+        modo = "rapido"
+    # marca a data ANTES de rodar, pelo mesmo motivo do teste de velocidade:
+    # varredura que falha nao pode virar tentativa a cada minuto ate a meia-noite
+    db.set_meta("auto_scan_ultima", hoje)
+    rede = _rede_automatica(app, cfg)
+    if not rede:
+        log.warning("varredura automatica sem rede para varrer")
+        return
+    log.info("varredura automatica da rede do dia: %s (portas=%s)", rede, modo)
+    try:
+        scan_mod.iniciar(app, rede, modo, origem="auto")
+    except RuntimeError as exc:
+        # ja tem uma varredura rodando (o usuario clicou no botao agora ha
+        # pouco): o retrato do dia ja vai existir, nao ha o que insistir
+        log.info("varredura automatica dispensada: %s", exc)
 
 
 def maintenance(app):
@@ -263,6 +357,14 @@ def main():
     dns_lan = probe_mod.SondaDnsLan(app, stop, alerts)
     app["dns_lan"] = dns_lan
 
+    # quem ja estava cadastrado antes desta versao nao pode virar "novidade
+    # da semana" na primeira varredura nova (roda uma vez so, e no-op depois)
+    import scan as scan_mod
+    try:
+        scan_mod.migrar_fundadores()
+    except Exception:
+        log.exception("falha marcando os aparelhos fundadores")
+
     # o CLI do nordvpn custa segundos por chamada: le em segundo plano
     app["mesh"] = mesh_mod.SondaMesh(stop)
 
@@ -291,6 +393,8 @@ def main():
                      daemon=True).start()
     threading.Thread(target=agendador_velocidade, args=(app,),
                      name="agenda-velocidade", daemon=True).start()
+    threading.Thread(target=agendador_varredura, args=(app,),
+                     name="agenda-varredura", daemon=True).start()
 
     log.info("monitorando: %s", ", ".join("%s(%s)" % (p.name_link, p.iface)
                                           for p in probes))

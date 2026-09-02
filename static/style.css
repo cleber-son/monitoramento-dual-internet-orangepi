@@ -29,7 +29,7 @@
      ficavam abafados, principalmente o laranja. */
   --giga:         #4da3ff;
   --impacto:      #ff7a45;
-  --roteador:     #a98bff;
+  --roteador:     #37d6d6;
 
   --good:         #2ecc71;
   --good-2:       #8ef0b6;
@@ -406,7 +406,10 @@ main {
 /* ------------------------------------------------------------ gráficos */
 .grafico-wrap { position: relative; width: 100%; }
 .grafico {
-  display: block; width: 100%; height: 280px;
+  /* subiu de 280 para 400: com três linhas quase encostadas em 4 ms, 280px
+     empilhava tudo numa faixa de poucos pixels e a faixa mín–máx não tinha
+     onde aparecer */
+  display: block; width: 100%; height: 400px;
   background: rgba(0, 0, 0, .38);
   border: 1px solid var(--borda);
   border-radius: 9px;
@@ -518,7 +521,9 @@ main {
 .tag-QUEDA { background: rgba(208,59,59,.18); color: #ff9b9b; }
 .tag-LATENCIA_ALTA { background: rgba(250,178,25,.16); color: #ffd479; }
 .tag-aberto { background: rgba(208,59,59,.3); color: #fff; }
-.tag-lan { background: rgba(138,111,224,.20); color: #c3b3f5; letter-spacing: .04em; }
+/* segue a cor do link ROTEADOR, que virou ciano — a etiqueta e a linha do
+   gráfico têm de ser a mesma coisa aos olhos */
+.tag-lan { background: rgba(55,214,214,.20); color: #9fe9e9; letter-spacing: .04em; }
 .ponto-link { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 7px; vertical-align: baseline; }
 
 .paginacao { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
@@ -660,7 +665,7 @@ body { overflow-x: hidden; }
   }
   .card-rodape span:last-child { grid-column: 1 / -1; }
 
-  .grafico { height: 210px; }
+  .grafico { height: 280px; }
   .grafico-baixo { height: 115px; }
 
   /* tooltip vira uma faixa no topo do gráfico, sem escapar da tela */
@@ -760,6 +765,51 @@ body { overflow-x: hidden; }
      estatísticas continua com rolagem própria para não estourar a tela. */
   .wrap-vellog { overflow-x: visible; max-height: none; }
   #tab-vel td.vazio { display: block; }
+
+  /* --- e o log das varreduras também: sete colunas não cabem no celular --- */
+  #tab-scanlog thead { display: none; }
+  #tab-scanlog, #tab-scanlog tbody { display: block; }
+  #tab-scanlog tbody tr {
+    display: block;
+    background: var(--surface-2);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 11px 13px;
+    margin-bottom: 10px;
+  }
+  #tab-scanlog tbody tr:hover td { background: none; }
+  #tab-scanlog td {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 14px;
+    border: none;
+    padding: 4px 0;
+    white-space: normal;
+    text-align: right;
+  }
+  #tab-scanlog td::before {
+    content: attr(data-rot);
+    color: var(--muted);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    flex: none;
+  }
+  #tab-scanlog td[data-rot="Quando"] {
+    font-size: 1rem;
+    font-weight: 650;
+    color: var(--ink);
+    padding-bottom: 8px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--borda);
+  }
+  #tab-scanlog td.vazio { display: block; text-align: center; padding: 18px 0; }
+  #tab-scanlog td.vazio::before { content: none; }
+  /* só os eventos deixam de rolar: eles viraram cartões. A tabela de
+     estatísticas continua com rolagem própria para não estourar a tela. */
+  .wrap-scanlog { overflow-x: visible; max-height: none; }
+  #tab-scanlog td.vazio { display: block; }
 
   .wrap-eventos { overflow-x: visible; }
 
@@ -1139,13 +1189,49 @@ main > .painel:nth-of-type(5n+5) { --acento: #ffc531; --acento-2: #ff9d5c; }
 }
 .porta small { color: var(--muted); font-size: 0.7rem; }
 .tag-eu { background: rgba(77, 163, 255, .18); color: #9fd0ff; }
-.tag-gw { background: rgba(169, 139, 255, .18); color: #c3b3f5; }
+.tag-gw { background: rgba(55, 214, 214, .18); color: #9fe9e9; }
 .tag-novo { background: rgba(250, 178, 25, .18); color: #ffd479; }
 .tag-rand { background: var(--surface-3); color: var(--muted); }
+.tag-manual { background: var(--surface-3); color: var(--ink-2);
+              font-size: 0.68rem; padding: 2px 7px; border-radius: 999px;
+              border: 1px solid var(--borda); white-space: nowrap; }
+
+/* ------------------------------------------------------------ ouro
+   Aparelho que chegou nesta semana. A cor é ouro porque ela não existe em
+   nenhum outro lugar da página — amarelo puro já é "atenção" nos alertas, e
+   um aparelho novo não é um problema, é uma novidade. A cor NUNCA vem
+   sozinha: a linha ganha barra lateral, etiqueta escrita e a idade em texto,
+   senão quem imprime em preto-e-branco ou não distingue amarelo perde a
+   informação inteira. */
+:root {
+  --ouro:        #ffca4d;
+  --ouro-tinta:  #ffdd8f;
+  --ouro-fraco:  rgba(255, 202, 77, .13);
+}
+.tag-semana {
+  background: rgba(255, 202, 77, .20); color: var(--ouro-tinta);
+  border: 1px solid rgba(255, 202, 77, .45);
+  font-weight: 680;
+}
+.ouro-tx { color: var(--ouro-tinta); font-variant-numeric: tabular-nums; }
+.erro-tx { color: #ffb3b3; }
 .tabela-scan tbody tr.linha-eu { background: rgba(77, 163, 255, .05); }
-.tabela-scan tbody tr.linha-nova { box-shadow: inset 3px 0 0 var(--warning); }
+.tabela tbody tr.linha-nova {
+  background: var(--ouro-fraco);
+  box-shadow: inset 4px 0 0 var(--ouro);
+}
+.tabela tbody tr.linha-nova .sc-nome { color: var(--ouro-tinta); }
 .legenda-scan { margin-top: 10px; gap: 14px; }
 .legenda-scan .leg { gap: 7px; }
+
+.sc-auto { margin-top: -4px; font-size: 0.82rem; }
+.scan-log { margin-top: 22px; border-top: 1px solid var(--borda); padding-top: 16px; }
+.scan-log h3 { font-size: 0.94rem; font-weight: 640; }
+.wrap-scanlog { max-height: 420px; overflow-y: auto; }
+.wrap-scanlog thead th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--surface); box-shadow: inset 0 -1px 0 var(--borda);
+}
 
 @media (max-width: 760px) {
   /* a tabela da varredura vira cartão, como a de eventos: oito colunas não

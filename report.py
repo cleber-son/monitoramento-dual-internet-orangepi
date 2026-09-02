@@ -393,3 +393,258 @@ def gerar(period="24h", frm=None, to=None, link=None):
 
     _tabela_eventos(doc, eventos, sub, 2, total_pag, link)
     return doc.bytes()
+
+
+# ---------------------------------------------------------------------------
+# Inventario dos aparelhos da rede
+#
+# Documento diferente do relatorio de quedas: aquele vai para a operadora e so
+# fala de internet; este e para o usuario -- quem esta ligado na casa, e
+# principalmente quem apareceu ESTA SEMANA. Por isso a novidade tem cor propria
+# (ouro) e uma etiqueta escrita: no papel preto-e-branco, ou para quem nao
+# distingue as cores, a cor sozinha nao diria nada.
+# ---------------------------------------------------------------------------
+OURO = (0.647, 0.451, 0.008)            # #a57302 - tinta do destaque
+OURO_FUNDO = (0.996, 0.957, 0.847)      # #fef4d8 - fundo da linha nova
+OURO_BARRA = (0.851, 0.616, 0.031)      # #d99d08 - barra lateral
+
+# Larguras somam LARG_UTIL (511 pt). As portas abertas nao cabem numa coluna
+# propria sem espremer o resto: elas descem para uma segunda linha do aparelho.
+SCAN_COLS = [
+    ("APARELHO", 128, "esq"),
+    ("IP", 68, "esq"),
+    ("MAC", 88, "esq"),
+    ("FABRICANTE", 92, "esq"),
+    ("CONEXAO", 47, "esq"),
+    ("LATENCIA", 47, "dir"),
+    ("VISTO DESDE", 41, "esq"),
+]
+CONEXAO_ROT = {"cabo": "cabo", "wifi": "Wi-Fi", "indefinida": "indefinida",
+               "desconhecida": "sem medida"}
+
+
+def _corta(texto, largura, tamanho, negrito=False):
+    """Corta com reticencias para o texto nunca invadir a coluna vizinha."""
+    texto = str(texto or "")
+    if pdf._largura(texto, tamanho, negrito) <= largura:
+        return texto
+    while texto and pdf._largura(texto + "...", tamanho, negrito) > largura:
+        texto = texto[:-1]
+    return texto + "..."
+
+
+def _idade(pv, agora):
+    if not pv:
+        return "-"
+    dias = max(0, (agora - int(pv)) // 86400)
+    if dias == 0:
+        return "hoje"
+    if dias == 1:
+        return "ontem"
+    if dias < 30:
+        return "ha %d dias" % dias
+    return _dt(pv, "%d/%m/%Y")
+
+
+def _scan_cabecalho_tabela(pag, y):
+    x = MARGEM
+    pag.retangulo(MARGEM, y - 4, LARG_UTIL, 20, preenche=(0.965, 0.965, 0.955))
+    for rot, larg, al in SCAN_COLS:
+        pag.texto(x + (larg - 4 if al == "dir" else 4), y + 1, rot, 7.5,
+                  negrito=True, cor=FRACO, alinhamento=al)
+        x += larg
+    return y + 22
+
+
+def _scan_linha(pag, y, h, agora, zebra):
+    novo = bool(h.get("novo_semana"))
+    portas = ", ".join(
+        "%s%s" % (p.get("porta"), (" (%s)" % p["servico"]) if p.get("servico") else "")
+        for p in (h.get("portas") or []))
+    alt = 16 + (10 if portas else 0)
+
+    if novo:
+        pag.retangulo(MARGEM, y - 3, LARG_UTIL, alt, preenche=OURO_FUNDO)
+        pag.retangulo(MARGEM, y - 3, 3, alt, preenche=OURO_BARRA)
+    elif zebra:
+        pag.retangulo(MARGEM, y - 3, LARG_UTIL, alt, preenche=(0.984, 0.984, 0.980))
+
+    nome = h.get("apelido") or h.get("nome") or h.get("tipo") or "(sem nome)"
+    if h.get("gateway"):
+        nome = nome + " [roteador]"
+    elif h.get("eu"):
+        nome = nome + " [este monitor]"
+    tinta = OURO if novo else TINTA2
+
+    vals = [
+        (nome, True if novo else False),
+        (h.get("ip") or "-", False),
+        (h.get("mac") or "-", False),
+        (h.get("vendor") or "-", False),
+        (CONEXAO_ROT.get(h.get("conexao"), "-"), False),
+        (_n(h.get("rtt_ms"), 2, " ms") if h.get("rtt_ms") is not None else "-", False),
+        (_idade(h.get("primeiro_visto"), agora), False),
+    ]
+    x = MARGEM
+    for (rot, larg, al), (val, negrito) in zip(SCAN_COLS, vals):
+        pad = 8 if x == MARGEM else 4
+        util = larg - pad - 4
+        pag.texto(x + (larg - 4 if al == "dir" else pad), y,
+                  _corta(val, util, 8.5, negrito), 8.5, negrito=negrito,
+                  cor=TINTA if negrito else tinta, alinhamento=al)
+        x += larg
+    if novo:
+        # a etiqueta escrita e obrigatoria: a cor sozinha nao sobrevive a
+        # impressao em preto-e-branco nem a quem nao distingue amarelo
+        pag.texto(MARGEM + 8, y + 10, "NOVO NA SEMANA", 6.5, negrito=True, cor=OURO)
+    if portas:
+        pag.texto(MARGEM + (120 if novo else 8), y + 10,
+                  _corta("portas abertas: " + portas, LARG_UTIL - 130, 7.5),
+                  7.5, cor=FRACO)
+    return y + alt
+
+
+def _scan_resumo(pag, y, hosts, rede, agora):
+    novos = [h for h in hosts if h.get("novo_semana")]
+    cabo = sum(1 for h in hosts if h.get("conexao") == "cabo")
+    wifi = sum(1 for h in hosts if h.get("conexao") == "wifi")
+    caixas = [
+        ("APARELHOS", str(len(hosts)), TINTA),
+        ("POR CABO", str(cabo), TINTA2),
+        ("POR WI-FI", str(wifi), TINTA2),
+        ("NOVOS NA SEMANA", str(len(novos)), OURO if novos else TINTA2),
+    ]
+    larg = (LARG_UTIL - 3 * 8) / 4
+    x = MARGEM
+    for rot, val, cor in caixas:
+        destaque = rot == "NOVOS NA SEMANA" and novos
+        pag.retangulo(x, y, larg, 46,
+                      preenche=OURO_FUNDO if destaque else (0.972, 0.972, 0.965))
+        if destaque:
+            pag.retangulo(x, y, 3, 46, preenche=OURO_BARRA)
+        pag.texto(x + 10, y + 8, rot, 7, negrito=True, cor=FRACO)
+        pag.texto(x + 10, y + 20, val, 19, negrito=True, cor=cor)
+        x += larg + 8
+    y += 58
+    if novos:
+        quem = ", ".join((n.get("apelido") or n.get("nome") or n.get("tipo")
+                          or n.get("vendor") or n.get("mac") or "?")
+                         for n in novos[:6])
+        if len(novos) > 6:
+            quem += " e mais %d" % (len(novos) - 6)
+        pag.texto(MARGEM, y, _corta("Apareceram nos ultimos 7 dias: " + quem,
+                                    LARG_UTIL, 9), 9, cor=OURO)
+        y += 16
+    return y
+
+
+def _scan_log(doc, historico, sub, pagina, total):
+    pag = doc.nova_pagina()
+    _cabecalho(pag, "Log das varreduras", sub, pagina, total)
+    y = 104
+    pag.texto(MARGEM, y, "Quando a rede foi varrida, por quem, e o que apareceu "
+                         "de novo em cada varredura.", 9, cor=TINTA2)
+    y += 22
+    cols = [("QUANDO", 118), ("ORIGEM", 60), ("REDE", 165), ("APARELHOS", 60),
+            ("NOVOS", 50), ("DUROU", 58)]
+    x = MARGEM
+    pag.retangulo(MARGEM, y - 4, LARG_UTIL, 20, preenche=(0.965, 0.965, 0.955))
+    for rot, larg in cols:
+        pag.texto(x + 4, y + 1, rot, 7.5, negrito=True, cor=FRACO)
+        x += larg
+    y += 22
+    if not historico:
+        pag.texto(MARGEM, y, "Nenhuma varredura registrada ainda.", 9.5, cor=TINTA2)
+    for i, v in enumerate(historico):
+        if y > pdf.A4[1] - 90:
+            break
+        if i % 2 == 0:
+            pag.retangulo(MARGEM, y - 3, LARG_UTIL, 16, preenche=(0.984, 0.984, 0.980))
+        vals = [
+            _dt(v["ts"]),
+            "agendada" if v["origem"] == "auto" else "manual",
+            _corta(v.get("rotulo") or v["rede_id"], 160, 8.5),
+            "-" if v.get("erro") else str(v["total"]),
+            str(v["n_novos"]) if v["n_novos"] else "-",
+            ("%ds" % v["duracao_s"]) if v.get("duracao_s") is not None else "-",
+        ]
+        x = MARGEM
+        for (rot, larg), val in zip(cols, vals):
+            destaque = rot == "NOVOS" and v["n_novos"]
+            pag.texto(x + 4, y, val, 8.5, negrito=bool(destaque),
+                      cor=OURO if destaque else TINTA2)
+            x += larg
+        y += 16
+        if v.get("erro"):
+            pag.texto(MARGEM + 8, y - 2, _corta("falhou: " + v["erro"], 400, 7.5),
+                      7.5, cor=CRITICO)
+            y += 11
+        elif v.get("novos"):
+            # QUEM apareceu naquele dia e a informacao que o log existe para
+            # guardar: a contagem sozinha nao serve de nada daqui a um mes
+            quem = ", ".join(
+                "%s (%s)" % (n.get("nome") or n.get("vendor") or n.get("mac") or "?",
+                             n.get("ip") or n.get("mac") or "-")
+                for n in v["novos"])
+            pag.texto(MARGEM + 8, y - 2,
+                      _corta("apareceram: " + quem, LARG_UTIL - 20, 7.5), 7.5, cor=OURO)
+            y += 11
+    _rodape_scan(pag)
+    return pag
+
+
+def _rodape_scan(pag):
+    y = pdf.A4[1] - 34
+    pag.linha(MARGEM, y - 10, pdf.A4[0] - MARGEM, y - 10, GRADE, 0.8)
+    pag.texto(MARGEM, y, "netmon - inventario da rede local", 8, cor=FRACO)
+    pag.texto(pdf.A4[0] - MARGEM, y, "gerado em %s" % _dt(time.time()), 8,
+              cor=FRACO, alinhamento="dir")
+
+
+def gerar_scan(dados, historico=None):
+    """PDF dos aparelhos da rede a partir do retorno de scan.ultimo()."""
+    agora = int(time.time())
+    hosts = dados.get("hosts") or []
+    rede = dados.get("rede") or {}
+    rotulo = rede.get("rotulo") or rede.get("cidr") or "rede local"
+
+    # cabe 1 ou 2 linhas por aparelho: a paginacao tem de ser calculada antes
+    # de desenhar, senao a contagem "pagina X de Y" do cabecalho sai errada
+    alturas = [16 + (10 if (h.get("portas") or []) else 0) for h in hosts]
+    limite = pdf.A4[1] - 96          # onde o rodape comeca
+    paginas, atual, y = [], [], 0.0
+    topo_1a, topo_n = 0.0, 0.0
+    for h, alt in zip(hosts, alturas):
+        if not atual:
+            y = 0.0
+        if y + alt > (limite - (300 if not paginas else 126)):
+            paginas.append(atual)
+            atual, y = [], 0.0
+        atual.append(h)
+        y += alt
+    if atual or not paginas:
+        paginas.append(atual)
+    total_pag = len(paginas) + 1     # + a pagina do log
+
+    doc = pdf.PDF(titulo="Aparelhos na rede - %s" % rotulo)
+    sub = "%s  |  varredura de %s" % (rotulo, _dt(dados.get("ts") or agora))
+
+    for i, lote in enumerate(paginas):
+        pag = doc.nova_pagina()
+        _cabecalho(pag, "Aparelhos na Rede", sub, i + 1, total_pag)
+        y = 100
+        if i == 0:
+            y = _scan_resumo(pag, y, hosts, rede, agora)
+            pag.texto(MARGEM, y + 4,
+                      "Cabo ou Wi-Fi e palpite pela assinatura da latencia: nao existe "
+                      "como perguntar isso a um aparelho pela rede.", 8.5, cor=FRACO)
+            y += 24
+        y = _scan_cabecalho_tabela(pag, y)
+        if not lote:
+            pag.texto(MARGEM, y, "Nenhum aparelho encontrado nesta rede.", 9.5, cor=TINTA2)
+        for j, h in enumerate(lote):
+            y = _scan_linha(pag, y, h, agora, zebra=(j % 2 == 0))
+        _rodape_scan(pag)
+
+    _scan_log(doc, historico or [], sub, total_pag, total_pag)
+    return doc.bytes()

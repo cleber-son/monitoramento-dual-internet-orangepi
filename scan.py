@@ -649,13 +649,52 @@ def apelidar(mac, nome):
     return nome or None
 
 
-def _registrar(hosts):
-    """Grava quem foi visto e devolve o conjunto dos que sao novidade."""
+CHAVE_REDES = "scan:redes_vistas"
+
+
+def redes_vistas():
+    d = db.get_meta(CHAVE_REDES)
+    return d if isinstance(d, dict) else {}
+
+
+def migrar_fundadores():
+    """Marca como FUNDADOR quem ja estava cadastrado antes desta ideia existir.
+
+    Sem isso, a primeira varredura depois da atualizacao pintaria a casa
+    inteira de ouro: todo aparelho conhecido tem `primeiro` da primeira
+    varredura, que e recente. "Novo na semana" so quer dizer alguma coisa se
+    quem estava aqui desde o comeco nao contar.
+    """
+    if db.get_meta(CHAVE_REDES) is not None:
+        return
+    with _conhecidos_lock:
+        tabela = conhecidos()
+        for reg in tabela.values():
+            reg["fundador"] = True
+        db.set_meta(CHAVE_CONHECIDOS, tabela)
+    vistas = {}
+    for k, v in db.list_meta_prefix("scan:ultimo:").items():
+        rede_id = k[len("scan:ultimo:"):]
+        vistas[rede_id] = (v or {}).get("ts") or int(time.time())
+    db.set_meta(CHAVE_REDES, vistas)
+    log.info("varredura: %d aparelho(s) marcados como fundadores em %d rede(s)",
+             len(tabela), len(vistas))
+
+
+def _registrar(hosts, rede_id=None):
+    """Grava quem foi visto e devolve o conjunto dos que sao novidade.
+
+    "Novidade" e por REDE, nao global: a primeira varredura de uma rede
+    cadastra a casa inteira de uma vez, e sair anunciando 13 aparelhos novos
+    seria ruido, nao informacao. Quem entra nessa leva fica marcado `fundador`
+    e nunca mais e novidade -- foi encontrado, nao chegou.
+    """
     agora = int(time.time())
     novos = set()
     with _conhecidos_lock:
         tabela = conhecidos()
-        primeira_vez = not tabela        # na 1a varredura ninguem e "novo"
+        vistas = redes_vistas()
+        primeira_vez = not tabela or (rede_id is not None and rede_id not in vistas)
         for h in hosts:
             mac = h.get("mac")
             if not mac:
@@ -663,17 +702,50 @@ def _registrar(hosts):
             reg = tabela.get(mac)
             if reg is None:
                 reg = {"primeiro": agora, "nome": None}
-                if not primeira_vez:
+                if primeira_vez:
+                    reg["fundador"] = True
+                else:
                     novos.add(mac)
             reg["ultimo"] = agora
             reg["ip"] = h.get("ip")
             tabela[mac] = reg
             h["primeiro_visto"] = reg.get("primeiro")
             h["apelido"] = reg.get("nome")
+            h["fundador"] = bool(reg.get("fundador"))
         db.set_meta(CHAVE_CONHECIDOS, tabela)
+        if rede_id and rede_id not in vistas:
+            vistas[rede_id] = agora
+            db.set_meta(CHAVE_REDES, vistas)
     for h in hosts:
         h["novo"] = h.get("mac") in novos
+    marcar_novidade(hosts)
     return novos
+
+
+def marcar_novidade(hosts, agora=None):
+    """`novo_semana`: chegou na rede nos ultimos 7 dias.
+
+    Diferente de `novo`, que so vale para a varredura em que o aparelho estreou
+    e some na varredura seguinte. Quem entrou na rede na terca continua sendo
+    novidade no sabado, e e essa a pergunta que interessa: "apareceu alguem
+    aqui esta semana?". Fundador nunca conta -- ele nao chegou, ele ja estava.
+
+    Por depender da hora atual e recalculado a cada leitura; guardar o flag
+    junto do retrato da varredura o deixaria envelhecer errado.
+    """
+    agora = int(agora or time.time())
+    tabela = conhecidos()
+    for h in hosts:
+        reg = tabela.get(h.get("mac") or "") or {}
+        pv = h.get("primeiro_visto") or reg.get("primeiro")
+        fundador = h.get("fundador")
+        if fundador is None:
+            fundador = bool(reg.get("fundador"))
+            h["fundador"] = fundador
+        h["novo_semana"] = bool(pv and not fundador
+                                and agora - pv <= db.NOVO_JANELA_S)
+        h["idade_s"] = (agora - pv) if pv else None
+    return hosts
 
 
 # ---------------------------------------------------------------------------
@@ -704,6 +776,7 @@ def ultimo(rede_id):
         if reg:
             h["apelido"] = reg.get("nome")
             h["primeiro_visto"] = reg.get("primeiro")
+    marcar_novidade(d.get("hosts") or [])
     return d
 
 
@@ -714,7 +787,7 @@ def _publicar(app, dados):
         log.exception("falha publicando a varredura")
 
 
-def varrer(app, rede_id=None, modo_portas="rapido"):
+def varrer(app, rede_id=None, modo_portas="rapido", origem="manual"):
     rede = _rede_por_id(app, rede_id)
     iface = rede["iface"]
     portas = {"nenhuma": [], "rapido": PORTAS_RAPIDO,
@@ -727,13 +800,15 @@ def varrer(app, rede_id=None, modo_portas="rapido"):
     inicio = int(time.time())
     r = {
         "rede": rede, "ts": inicio, "fase": "descobrindo", "erro": None,
-        "modo_portas": modo_portas, "hosts": [], "total": 0, "ok": False,
+        "modo_portas": modo_portas, "origem": origem,
+        "hosts": [], "total": 0, "ok": False,
         "progresso": {"feito": 0, "total": len(alvos),
                       "etapa": "procurando aparelhos em %s" % rede["cidr"]},
     }
     _estado["atual"] = dict(r)
     _publicar(app, dict(r))
-    log.info("varredura de %s (%s), portas=%s", rede["cidr"], iface, modo_portas)
+    log.info("varredura %s de %s (%s), portas=%s",
+             origem, rede["cidr"], iface, modo_portas)
 
     try:
         ultimo_aviso = [0.0]
@@ -830,25 +905,47 @@ def varrer(app, rede_id=None, modo_portas="rapido"):
             h["vendor"] = marcas.get(h["mac"])
             h["tipo"] = palpite(h["vendor"], h["portas"], h["gateway"], h["eu"])
 
-        _registrar(r["hosts"])
+        novos_macs = _registrar(r["hosts"], rede["id"])
         r["ok"] = True
         r["fase"] = "fim"
         r["duracao_s"] = int(time.time()) - inicio
         r["progresso"] = {"feito": len(r["hosts"]), "total": len(r["hosts"]),
                           "etapa": "pronto"}
         db.set_meta("scan:ultimo:%s" % rede["id"], r)
-        log.info("varredura de %s: %d aparelhos em %ds",
-                 rede["cidr"], len(r["hosts"]), r["duracao_s"])
+        _registrar_no_log(r, rede, origem, modo_portas, novos_macs)
+        log.info("varredura de %s: %d aparelhos em %ds (%d novos)",
+                 rede["cidr"], len(r["hosts"]), r["duracao_s"], len(novos_macs))
     except Exception as exc:
         r["fase"] = "erro"
         r["ok"] = False
         r["erro"] = (str(exc) or exc.__class__.__name__)[:200]
         log.warning("varredura de %s falhou: %s", rede.get("cidr"), r["erro"])
+        try:
+            db.add_scan(rede.get("id") or "?", rede.get("rotulo"), origem,
+                        modo_portas, 0, [], int(time.time()) - inicio, r["erro"])
+        except Exception:
+            log.exception("falha registrando a varredura que falhou")
     finally:
         _estado["atual"] = None
 
     _publicar(app, dict(r))
     return r
+
+
+def _registrar_no_log(r, rede, origem, modo_portas, novos_macs):
+    """Uma linha no historico. Os aparelhos novos vao junto com nome e
+    fabricante congelados: daqui a um mes o retrato da varredura ja foi
+    sobrescrito, mas o log ainda tem de dizer QUEM apareceu naquele dia."""
+    novos = [{
+        "mac": h.get("mac"), "ip": h.get("ip"),
+        "nome": h.get("apelido") or h.get("nome") or h.get("tipo"),
+        "vendor": h.get("vendor"), "conexao": h.get("conexao"),
+    } for h in r["hosts"] if h.get("mac") in novos_macs]
+    try:
+        db.add_scan(rede["id"], rede.get("rotulo"), origem, modo_portas,
+                    len(r["hosts"]), novos, r.get("duracao_s"), None)
+    except Exception:
+        log.exception("falha registrando a varredura no log")
 
 
 def _gateway(iface):
@@ -859,7 +956,7 @@ def _gateway(iface):
         return None
 
 
-def iniciar(app, rede_id=None, modo_portas="rapido"):
+def iniciar(app, rede_id=None, modo_portas="rapido", origem="manual"):
     """Dispara numa thread. RuntimeError se ja houver uma varredura rodando."""
     _rede_por_id(app, rede_id)          # valida antes de prender o lock
     if not _lock.acquire(blocking=False):
@@ -870,7 +967,7 @@ def iniciar(app, rede_id=None, modo_portas="rapido"):
 
     def alvo():
         try:
-            varrer(app, rede_id, modo_portas)
+            varrer(app, rede_id, modo_portas, origem)
         finally:
             _lock.release()
 
