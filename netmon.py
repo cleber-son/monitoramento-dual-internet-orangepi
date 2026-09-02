@@ -251,8 +251,11 @@ def maintenance(app):
             if now - last_hour >= 3600:
                 db.rollup_hours()
                 last_hour = now
-            # purga uma vez por dia, de madrugada
-            hora = time.localtime(now).tm_hour
+            # purga uma vez por dia, de madrugada -- no fuso do usuario, como
+            # todo horario aqui. Nao muda nada de pratico (ninguem repara na
+            # hora de um VACUUM), mas um `time.localtime()` sobrando neste
+            # arquivo e a armadilha esperando o proximo agendamento
+            hora = _agora().hour
             if now - last_purge >= 20 * 3600 and hora == 4:
                 log.info("executando purga e checkpoint")
                 db.purge()
