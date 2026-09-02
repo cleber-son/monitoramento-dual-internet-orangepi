@@ -151,9 +151,15 @@ function limpar(no) { while (no.firstChild) no.removeChild(no.firstChild); }
 /* Mede o SVG pela caixa real. `clientWidth` arredonda e vale 0 enquanto o
    layout não assentou — e um viewBox medido errado desenha o gráfico em escala
    errada, ocupando só um pedaço do quadro. */
+/* O padrão é o último recurso, e ele MENTE em silêncio: um SVG medido em zero
+   recebe um viewBox de 300 px, e como viewBox cria proporção intrínseca, o
+   elemento passa a valer 300 px de verdade — o desenho se auto-trava num
+   tamanho errado e nada acusa. Antes de cair no padrão, pergunta ao pai, que
+   tem largura de layout de verdade. */
 function medir(svg, wPadrao, hPadrao) {
   const r = svg.getBoundingClientRect();
-  return { W: Math.round(r.width) || svg.clientWidth || wPadrao,
+  const paiL = svg.parentElement ? svg.parentElement.clientWidth : 0;
+  return { W: Math.round(r.width) || svg.clientWidth || paiL || wPadrao,
            H: Math.round(r.height) || svg.clientHeight || hPadrao };
 }
 
@@ -606,26 +612,67 @@ function renderCards(links) {
   });
 }
 
+/* A mini-linha do card. Não é enfeite: é onde se vê que os 4,7 ms de agora
+   vêm de uma linha estável ou de um serrote. Segue o mesmo modelo do gráfico
+   grande — área com degradê, linha e ponto na última medida — para os dois
+   lerem como a mesma coisa.
+
+   Ela mostra um número, e por isso mostra também a escala: uma sparkline sem
+   referência não deixa saber se aquele pico foi 5 ms ou 500 ms. O máximo do
+   trecho fica escrito no canto, com uma marca tênue na altura dele. */
 function desenharSpark(nome, pontos) {
   const svg = document.querySelector(`[data-spark="${nome}"]`);
   if (!svg) return;
-  const { W: w, H: h } = medir(svg, 300, 44);
+  const { W: w, H: h } = medir(svg, 300, 76);
   limpar(svg);
   svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
-  const vals = pontos.filter((p) => p[1] !== null);
+  const vals = pontos.filter((p) => p[1] !== null && p[1] !== undefined);
   if (vals.length < 2) return;
+
+  const cor = corLink(nome);
   const t0 = pontos[0][0], t1 = pontos[pontos.length - 1][0] || t0 + 1;
   const ys = vals.map((p) => p[1]);
-  const ymax = Math.max(...ys) * 1.15 || 1;
+  const pico = Math.max(...ys);
+  const ymax = pico * 1.25 || 1;
+  const topo = 15;                       // espaço do rótulo do pico
+  const chao = h - 3;
   const X = (t) => ((t - t0) / Math.max(1, t1 - t0)) * w;
-  const Y = (v) => h - 3 - (v / ymax) * (h - 6);
-  let d = '', aberto = false;
-  pontos.forEach((p) => {
-    if (p[1] === null) { aberto = false; return; }
-    d += (aberto ? 'L' : 'M') + X(p[0]).toFixed(1) + ' ' + Y(p[1]).toFixed(1) + ' ';
-    aberto = true;
+  const Y = (v) => chao - (v / ymax) * (chao - topo);
+
+  const grad = 'sgrad-' + nome.replace(/[^A-Za-z0-9]/g, '');
+  const defs = svgEl('defs', {});
+  const g = svgEl('linearGradient', { id: grad, x1: 0, y1: 0, x2: 0, y2: 1 });
+  g.appendChild(svgEl('stop', { offset: '0%', 'stop-color': cor, 'stop-opacity': .42 }));
+  g.appendChild(svgEl('stop', { offset: '100%', 'stop-color': cor, 'stop-opacity': .03 }));
+  defs.appendChild(g);
+  svg.appendChild(defs);
+
+  // marca do pico: uma régua discreta, senão o desenho não tem escala nenhuma
+  svg.appendChild(svgEl('line', {
+    x1: 0, x2: w, y1: Y(pico), y2: Y(pico),
+    stroke: cor, 'stroke-width': 1, 'stroke-dasharray': '3 5', opacity: .3 }));
+
+  segmentos(pontos, 1).forEach((seg) => {
+    const linha = seg.map((p) => [X(p[0]), Y(p[1])]);
+    const d = caminho(linha, false);
+    if (linha.length > 1) {
+      svg.appendChild(svgEl('path', {
+        d: d + ` L${linha[linha.length - 1][0].toFixed(1)} ${chao} L${linha[0][0].toFixed(1)} ${chao} Z`,
+        fill: `url(#${grad})`, stroke: 'none' }));
+    }
+    svg.appendChild(svgEl('path', {
+      d, fill: 'none', stroke: cor, 'stroke-width': 2,
+      'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
   });
-  svg.appendChild(svgEl('path', { d, fill: 'none', stroke: corLink(nome), 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', opacity: .9 }));
+
+  const fim = vals[vals.length - 1];
+  const px = X(fim[0]), py = Y(fim[1]);
+  svg.appendChild(svgEl('circle', { cx: px, cy: py, r: 4.5, fill: '#0f0f0e', opacity: .8 }));
+  svg.appendChild(svgEl('circle', { cx: px, cy: py, r: 3, fill: cor }));
+
+  const rot = svgEl('text', { x: 2, y: Y(pico) - 4, fill: '#a5a39c', 'font-size': 10 });
+  rot.textContent = `pico ${nf(pico, 1)} ms`;
+  svg.appendChild(rot);
 }
 
 /* ------------------------------------------------------------ eixos */

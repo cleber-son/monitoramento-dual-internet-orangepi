@@ -434,6 +434,10 @@ Mudou de tamanho e de modelo:
   régua achataria contra o chão os 4 ms do dia a dia;
 - **grade só horizontal**: as verticais competiam com as próprias linhas de dados
   agora que há área pintada;
+- **a mini-linha do card segue o mesmo modelo** (área com degradê, linha, ponto
+  na última medida), com 76 px de altura e o **pico do trecho escrito no canto**,
+  numa régua tracejada: sparkline sem escala não deixa saber se aquele serrote
+  foi de 5 ms ou de 500 ms;
 - **suavização monótona (Hermite)** quando os pontos são esparsos. Monótona
   porque a spline ingênua "estoura" a curva entre dois pontos e desenha uma
   latência que nunca foi medida. Em janela ao vivo, com um ponto a cada 2 s, não
@@ -632,6 +636,18 @@ static/       index.html, app.js, style.css
 
 ## Detalhes que custaram caro para descobrir
 
+- **`viewBox` num `<svg>` sem largura declarada trava o elemento de tamanho.**
+  A mini-linha dos cards ficou meses desenhando só ~300 px, encostada à
+  esquerda, sobrando metade do card vazia — e três quartos no card do ROTEADOR,
+  que é o dobro de largo. A causa não era o desenho: `<svg>` é elemento
+  substituído e, com `width: auto`, o `viewBox` que o JS escreve nele cria uma
+  **proporção intrínseca**. Com `height: 44px` e viewBox de 300×44, a largura
+  usada vira 44 × (300/44) = exatamente 300 px, e o desenho da vez seguinte
+  mede 300 e reescreve o mesmo viewBox: **o erro se auto-alimenta e nada
+  acusa.** O gráfico grande nunca teve isso porque sempre declarou
+  `width: 100%`. Todo SVG desenhado por JS aqui declara `display: block;
+  width: 100%` na CSS, e `medir()` pergunta ao elemento pai antes de cair no
+  padrão — um padrão que vira viewBox é um número mágico que mente calado.
 - **O relógio deste aparelho está em UTC e o usuário não.** `time.localtime()`
   aqui devolve UTC: qualquer agendamento feito com ele sai **3 horas antes** do
   que a configuração diz, e a página, que formata no fuso do navegador, mostra o
