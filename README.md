@@ -95,7 +95,8 @@ relatórios que vão para a operadora.
 | 📈 **Guarda 5 anos de histórico** | amostras de 2 s por 48 h, minuto por 90 dias, hora por 5 anos — e estabiliza abaixo de 70 MB |
 | 📄 **Gera o PDF da prova** | um botão por internet: hora exata de cada queda, duração e causa, para mandar à operadora. Escrito à mão em Python puro — não há reportlab nem navegador headless neste aparelho |
 | 🔔 **Avisa no Discord/Slack** | webhook traduzido conforme o destino, e enviado **pelo outro link** se o principal estiver caído |
-| 🔊 **Grita na página** | banner, som e notificação do navegador |
+| 🗣️ **Fala em voz alta** | "GIGA caiu", "IMPACTA voltou" — banner, som, voz e notificação do navegador, ligados de fábrica |
+| 🌡️ **Vigia a própria febre** | a temperatura da CPU deste Orange Pi no cabeçalho: passando dos 75 °C o kernel corta o clock e a sonda atrasa — problema do medidor, não da internet |
 
 ### Os números daqui de casa
 
@@ -334,6 +335,35 @@ cada painel em cabeça e corpo.
 Um cuidado que não é óbvio: um `<svg>` dentro de seção fechada mede **0 px**.
 Ao reabrir, o desenho tem que ser refeito, senão aparece na escala errada.
 
+### A temperatura da CPU no cabeçalho
+
+O painel vigiava a internet e não vigiava **o aparelho que faz a vigilância**.
+Este Orange Pi 3 LTS não tem cooler: passando dos **75 °C** o kernel começa a
+cortar o clock, a sondagem que devia sair de 2 em 2 segundos atrasa, o jitter
+medido sobe — e o painel acusaria um problema de internet que é, na verdade,
+febre do próprio medidor. Agora a temperatura fica ao lado do relógio, o tempo
+todo.
+
+Os limiares **não são chutados**: saem dos *trip points* que o próprio driver
+térmico declara em `/sys/class/thermal/thermal_zone0`. Aqui o primeiro trip
+`passive` é 75 °C (onde o corte de clock começa) e o `critical` é 105 °C. O
+vermelho entra 15 °C acima do primeiro passivo, não no crítico — pintar de
+vermelho aos 105 °C seria avisar depois de o aparelho já ter desligado.
+
+| Faixa | O que significa |
+|---|---|
+| 🌡️ até 64 °C | temperatura normal |
+| 🌡️ 65–74 °C | esquentando, ainda sem prejuízo |
+| 🔥 75–89 °C | o kernel **já está cortando o clock** |
+| 🔥 90 °C ou mais | perto do desligamento térmico (pisca) |
+
+A cor nunca vem sozinha: os graus estão sempre escritos e o ícone troca de 🌡️
+para 🔥 a partir de "quente". Passando o mouse vem o resto — GPU, clock atual
+contra o máximo, carga por núcleo e os dois limiares.
+
+Custa dois `read()` em `/sys` (sem root, sem processo externo) com cache de 3 s,
+então difundir a cada ciclo de SSE não relê nada.
+
 ## O período manda em tudo
 
 O seletor de período era um detalhe dentro do painel de latência, e parecia
@@ -344,17 +374,24 @@ cartões porque é a pergunta que se faz primeiro: *de que pedaço de tempo esta
 falando?* Os cartões continuam sendo o estado de **agora** — só o resumo de
 quedas dentro do bloco segue o período:
 
-`ao vivo` · `1 min` · `10 min` · `30 min` · `1 h` · `2 h` · `24 h` · `2 dias` ·
-`7 dias` · `30 dias` · `tudo`
+`ao vivo · 2 h` · `1 min` · `10 min` · `30 min` · `1 h` · `6 h` · `24 h` ·
+`2 dias` · `7 dias` · `30 dias` · `tudo`
 
-- **Ao vivo** é o padrão: janela deslizante de 2 minutos, redesenhada a cada
-  ciclo de sondagem (2 s). É o modo de olhar enquanto o problema acontece.
+- **Ao vivo** é o padrão, e agora vale **2 horas** — não os 2 minutos de antes.
+  Dois minutos mostravam o instante e escondiam o dia: um pico de dez minutos
+  atrás já tinha saído da tela, e era preciso trocar de período para descobrir
+  que a internet vinha oscilando a manhã inteira. Duas horas cabem a manhã
+  recente e ainda deixam ver o segundo a segundo na ponta direita da linha. O
+  botão de `2 h` saiu por ter virado exatamente isto; entrou um de `6 h`, que
+  era o buraco que sobrava entre 1 h e 24 h.
 - **Tudo** começa na amostra mais antiga que o banco ainda guarda — o
   `/api/status` responde `inicio_dados` para a página saber onde é isso.
 - A escolha fica no `localStorage`: dá F5 e o período continua o mesmo.
-- A cadência de recarga segue a janela: 2 s ao vivo, 10 s até uma hora, 60 s
-  daí para cima. Redesenhar 30 dias a cada 2 segundos só gastaria CPU do
-  Orange Pi.
+- A cadência de recarga segue a janela: **10 s ao vivo**, 2 s nas janelas
+  curtas de verdade, 10 s até uma hora e 60 s daí para cima. Ao vivo são ~3600
+  pontos por link: recarregar isso a cada 2 s seriam 500 KB de JSON por ciclo
+  para mover a linha um pixel. Quem anda de segundo em segundo ali são os
+  cartões e a mini-linha, e esses já chegam pelo SSE.
 
 ### O destaque da queda
 
@@ -397,16 +434,60 @@ o soquete nela fazia toda consulta morrer no timeout e gravar "fabricante
 desconhecido" no cache permanente, que é pior do que não ter consultado.
 
 Nesta rede **nem PTR, nem NetBIOS, nem mDNS respondem** (foi testado). Por isso o
-nome do aparelho é um **apelido que você dá**, clicando no nome na tabela: fica
-guardado pelo MAC, sobrevive à troca de IP e não se perde no reset do histórico.
-Quem chegou nos últimos 7 dias fica **destacado em ouro**, com etiqueta escrita
-e a idade em texto ao lado da data — a cor nunca vai sozinha, senão a informação
-se perde na impressão em preto-e-branco e para quem não distingue amarelo. A data
-da primeira vez em que o aparelho foi visto fica na última coluna.
+nome do aparelho é um **apelido que você dá**, clicando no nome: fica guardado
+pelo MAC, sobrevive à troca de IP e não se perde no reset do histórico.
+
+### Era uma tabela torta, virou uma grade de cartões
+
+Oito colunas com células de tamanhos incompatíveis: um nome curto ao lado de
+três etiquetas, um MAC de dezessete caracteres, uma lista de portas que quebrava
+em quatro linhas. O resultado eram colunas de largura aleatória, linhas de
+altura diferente e nenhuma régua para o olho descer — e ainda um segundo layout
+escondido num `@media` só para o celular.
+
+Agora cada aparelho é um **cartão fechado**, todos do mesmo feitio, numa grade
+que se reflui sozinha (`auto-fill, minmax(310px, 1fr)`). A mesma marcação serve
+o celular e o monitor grande; o `@media` sobrou só para empilhar em uma coluna.
+
+- A **latência é o único número grande** do cartão e fica sempre na mesma
+  posição, para a coluna da direita virar uma régua que se lê descendo. Cor por
+  faixa absoluta — verde até 10 ms, âmbar até 50, vermelho acima.
+- Sob o nome vai uma **barra**: o aparelho contra o **mais lento da rede**. É o
+  que transforma a ordenação em algo que se lê sem comparar número por número.
+- IP, MAC, conexão e "conhecido desde" viram uma `<dl>` de rótulo à esquerda e
+  valor à direita — alinhados, sem coluna para esticar.
+
+### A ordem é por latência, da maior para a menor
+
+A ordem antiga era por IP, que é a ordem em que a varredura respondeu — não uma
+ordem que responda a alguma pergunta. `192.168.0.7` vir antes de `192.168.0.12`
+não diz nada a ninguém. A pergunta que se faz nesta seção é **"quem está devagar
+na minha rede?"**, e a resposta agora é simplesmente: *os primeiros da lista*.
+
+Quem não respondeu ao ping vai sempre **para o fim**, nas duas direções de
+ordenação: "sem medida" não é latência baixa nem alta, é ausência de informação,
+e ordenar as duas coisas juntas faria o aparelho calado parecer o mais rápido da
+casa. Empate desempata pelo IP, para a lista não dançar entre uma leitura e
+outra.
+
+O seletor **Ordenar por** oferece ainda `menor latência primeiro`, `novidades
+primeiro`, `IP` e `nome`, e a escolha fica no `localStorage`. A ordenação também
+é feita **no servidor** (`scan.ordenar`), na gravação e na leitura do retrato —
+assim o PDF do inventário sai na mesma ordem da página, inclusive para
+varreduras gravadas antes desta ordem existir.
+
+### Ouro para quem chegou esta semana
+
+Quem apareceu pela primeira vez nos últimos 7 dias deixa o **cartão inteiro
+dourado** — fundo, borda, barra lateral e o nome —, não só uma etiqueta perdida
+numa linha de tabela. A cor nunca vai sozinha: vem com a etiqueta escrita
+`✨ novo na semana` e a idade em texto ao lado da data, senão a informação se
+perde na impressão em preto-e-branco e para quem não distingue amarelo.
 
 O botão **📄 Salvar em PDF** gera o inventário da rede: resumo (quantos
-aparelhos, por cabo, por Wi-Fi, quantos novos na semana), a tabela inteira com os
-novos destacados e uma página final com o log das varreduras.
+aparelhos, por cabo, por Wi-Fi, quantos novos na semana), a lista inteira na
+mesma ordem da página, com os novos destacados, e uma página final com o log das
+varreduras.
 
 Uma varredura de /24 leva ~7 s com o cache de fabricantes quente (a primeira,
 com MACs novos, chega a 20 s por causa do limite de 1 consulta por segundo).
@@ -486,6 +567,51 @@ continua sendo um bloco visível.
 
 O limiar de 80 ms é agressivo de propósito: os dois links ficam em ~4 ms, então
 qualquer coisa acima disso já é anomalia gritante, não ruído.
+
+### A página fala: "GIGA caiu", "IMPACTA voltou"
+
+O bipe avisava que **alguma coisa** aconteceu. Três notas de 880 Hz não
+distinguem "a GIGA caiu" de "a IMPACTO voltou" — e é exatamente essa a
+informação que faz alguém largar o que está fazendo. Esta página vive numa aba
+atrás das outras, então agora ela **fala**, pela Web Speech API do navegador,
+em pt-BR:
+
+```
+GIGA caiu.        IMPACTA caiu.
+GIGA voltou.      IMPACTA voltou.
+```
+
+O nome falado **não é o nome de tela**: o usuário chama a IMPACTO de "Impacta" e
+é assim que ele quer ouvir. Escrito segue `IMPACTO`, que é o nome da operadora
+no contrato e nos relatórios em PDF (`FALA_LINK` em `app.js` faz a ponte).
+
+Os dois toques também passaram a ter **desenho oposto, de propósito**: a queda
+são três notas quadradas repetidas na mesma altura, o som de alarme; a volta são
+duas notas senoidais **subindo**, mais baixas. De outro cômodo e sem olhar a
+tela já dá para saber se a notícia é boa ou ruim, antes de a voz confirmar. A
+fala espera o toque terminar — sobrepostos, um abafa o outro.
+
+**Som, voz e notificação vêm ligados de fábrica** (`som_habilitado` e
+`voz_habilitada` valem `1` por padrão, e há uma chave para cada em
+Configurações). A permissão do navegador, porém, não se liga por configuração
+nenhuma — só o usuário a concede —, então o netmon a pede sozinho na carga da
+página **e de novo no primeiro gesto**, porque parte dos navegadores ignora o
+pedido que não vem de uma interação. O mesmo gesto destrava o áudio e a síntese
+de voz, que Chrome e Safari mantêm bloqueados até a pessoa tocar na página; sem
+isso o primeiro aviso de queda sairia mudo.
+
+Dois detalhes que custam caro quando faltam: `speechSynthesis.getVoices()` volta
+**vazio** na primeira chamada em quase todo navegador (a lista chega depois, no
+evento `voiceschanged`), por isso a voz é procurada a cada fala e não guardada
+numa constante; e o Chrome deixa a fila de fala **suspensa** quando a aba passa
+muito tempo em segundo plano, então cada fala chama `resume()` antes de
+`speak()` — sem isso o aviso só sairia quando a aba voltasse, que é quando ele
+já não serve para nada. Sem voz em português instalada, som e notificação
+continuam valendo.
+
+O botão **🔔 avisos ligados** no cabeçalho testa os três de uma vez. O
+"Silenciar som e voz" do banner de alerta cala os dois: quem aperta silenciar no
+meio de uma queda quer silêncio, não trocar um aviso sonoro por outro.
 
 ## Instalação
 
@@ -573,7 +699,7 @@ roteamento continua exatamente como estava.
 
 | Rota | O que devolve |
 |---|---|
-| `GET /api/status` | estado atual de cada link, IP externo, uptime 24h/7d/30d, evento aberto, `inicio_dados` |
+| `GET /api/status` | estado atual de cada link, IP externo, uptime 24h/7d/30d, evento aberto, `inicio_dados`, `sistema` (temperatura da CPU/GPU, clock, carga) |
 | `GET /api/samples?link=&from=&to=&res=auto` | série temporal (`raw`/`minute`/`hour`) |
 | `GET /api/events?link=&tipo=&from=&to=&limit=&offset=` | histórico de quedas com duração |
 | `GET /api/summary?period=24h` | uptime, nº de quedas, downtime, rtt, jitter, perda |
@@ -590,12 +716,12 @@ roteamento continua exatamente como estava.
 | `GET /api/alvos` | para onde cada sonda aponta e o estado de cada servidor DNS da LAN |
 | `GET /api/mesh` | estado do Meshnet, pares, e por qual link o túnel está saindo |
 | `POST /api/mesh` | liga/desliga: `{"meshnet":true}` — desligar exige `{"confirmar":"DESLIGAR"}` |
-| `GET /api/config` · `POST /api/config` | limiares, webhook, som, teste de velocidade automático, varredura automática |
+| `GET /api/config` · `POST /api/config` | limiares, webhook, som, voz, teste de velocidade automático, varredura automática |
 | `GET /api/links` | links, a placa de cada um e todas as placas do sistema |
 | `POST /api/links` | troca a placa (e o alvo do link LAN) ao vivo: `{"links":{"GIGA":{"iface":"eth0"}}}` |
 | `GET /api/ifaces` | só as placas de rede, com IP, gateway, USB e estado do cabo |
 | `POST /api/webhook/test` | dispara um payload de teste |
-| `GET /api/stream` | SSE ao vivo (`status` a cada 2 s, `alerta` na hora, e o andamento de `speedtest`, `traceroute` e `varredura`) |
+| `GET /api/stream` | SSE ao vivo (`status` a cada 2 s — inclui `sistema` —, `alerta` na hora, e o andamento de `speedtest`, `traceroute` e `varredura`) |
 | `GET /api/report.pdf?period=24h&link=GIGA` | relatório em PDF; com `link`, só as quedas daquele link |
 | `GET /api/logs` | pacote de diagnóstico |
 | `POST /api/reset` | apaga o histórico — exige `{"confirmar":"APAGAR"}` |
@@ -627,6 +753,7 @@ server.py     API HTTP, SSE, estáticos
 trace.py      traceroute próprio, sem root e sem o binário `traceroute`
 mesh.py       estado e liga/desliga do NordVPN Meshnet
 scan.py       varredura da rede local (ICMP + ARP + portas + fabricante)
+sistema.py    temperatura, clock e carga do próprio Orange Pi, direto de /sys
 pdf.py        escritor de PDF 1.4 feito à mão
 report.py     montagem do relatório de quedas e do inventário da rede
 run.sh              lock de instância única + watchdog
@@ -648,6 +775,15 @@ static/       index.html, app.js, style.css
   `width: 100%`. Todo SVG desenhado por JS aqui declara `display: block;
   width: 100%` na CSS, e `medir()` pergunta ao elemento pai antes de cair no
   padrão — um padrão que vira viewBox é um número mágico que mente calado.
+- **Aviso sonoro que só funciona depois que alguém clica não é aviso.** Chrome e
+  Safari bloqueiam áudio *e* síntese de voz até a página receber um gesto, e
+  vários navegadores ignoram `Notification.requestPermission()` que não venha de
+  uma interação. Só que o aviso de queda precisa sair **sozinho**, e ninguém
+  clica numa aba que está em segundo plano justamente porque a internet caiu.
+  A saída é destravar os três no **primeiro gesto que aparecer**, qualquer um
+  (`pointerdown`, `keydown`, `touchstart`, `{ once: true }`), muito antes de
+  haver algo a anunciar: um `AudioContext.resume()` e um `SpeechSynthesisUtterance`
+  mudo bastam para a fila ficar liberada pelo resto da sessão.
 - **O relógio deste aparelho está em UTC e o usuário não.** `time.localtime()`
   aqui devolve UTC: qualquer agendamento feito com ele sai **3 horas antes** do
   que a configuração diz, e a página, que formata no fuso do navegador, mostra o

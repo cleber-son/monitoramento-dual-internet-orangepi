@@ -47,6 +47,9 @@ const estado = {
   total: 0,
   porta: null,
   somOn: true,
+  vozOn: true,
+  vozDestravada: false,
+  sistema: null,
   silenciado: false,
   audioCtx: null,
   piscando: null,
@@ -68,13 +71,20 @@ const estado = {
    Um seletor só, no alto da página, mandando em todas as seções que falam de
    tempo: latência, perda, estatísticas, linha do tempo e histórico de quedas.
    Antes ele vivia dentro do painel de latência e parecia mandar só ali. */
+/* "Ao vivo" é uma janela de DUAS HORAS que anda com o relógio, não os dois
+   minutos de antes. Dois minutos mostravam o instante e escondiam o dia: um
+   pico de dez minutos atrás já tinha saído da tela, e era preciso trocar de
+   período para descobrir que a internet vinha oscilando a manhã inteira. Duas
+   horas cabem a manhã recente e ainda deixam ver o segundo a segundo na ponta
+   direita. O botão de 2 h saiu por ter virado exatamente isto; entrou um de
+   6 h, que era o buraco que sobrou entre 1 h e 24 h. */
 const PERIODOS = [
-  { id: 'vivo', rot: '● Ao vivo', curto: 'ao vivo', span: 120, vivo: true },
+  { id: 'vivo', rot: '● Ao vivo', curto: 'ao vivo (2 h)', span: 7200, vivo: true },
   { id: '1m',   rot: '1 min',     curto: '1 min',   span: 60 },
   { id: '10m',  rot: '10 min',    curto: '10 min',  span: 600 },
   { id: '30m',  rot: '30 min',    curto: '30 min',  span: 1800 },
   { id: '1h',   rot: '1 h',       curto: '1 hora',  span: 3600 },
-  { id: '2h',   rot: '2 h',       curto: '2 horas', span: 7200 },
+  { id: '6h',   rot: '6 h',       curto: '6 horas', span: 21600 },
   { id: '24h',  rot: '24 h',      curto: '24 horas', span: 86400 },
   { id: '2d',   rot: '2 dias',    curto: '2 dias',  span: 172800 },
   { id: '7d',   rot: '7 dias',    curto: '7 dias',  span: 604800 },
@@ -1353,7 +1363,8 @@ function renderPeriodo() {
     pill.className = 'pill resumo-cabeca ' + (p.vivo ? 'pill-on' : 'pill-neutro');
   }
   const janelaTxt = p.vivo
-    ? `últimos ${p.span} segundos, redesenhando a cada sondagem (2 s)`
+    ? `últimas 2 horas, andando com o relógio · desde ${fmtDataHora(t0)}`
+      + ' · os cartões e a mini-linha seguem a sondagem de 2 s'
     : (p.span
         ? `de ${fmtDataHora(t0)} até agora`
         : (estado.inicioDados
@@ -1364,7 +1375,7 @@ function renderPeriodo() {
   const eco = $('eco-latencia');
   if (eco) eco.textContent = p.curto;
   const evp = $('ev-periodo');
-  if (evp) evp.textContent = p.vivo ? 'ao vivo (últimos 2 minutos)' : p.curto;
+  if (evp) evp.textContent = p.vivo ? 'ao vivo (últimas 2 horas)' : p.curto;
 }
 
 function escolherPeriodo(id, salvar = true) {
@@ -1580,22 +1591,32 @@ async function carregarEventos() {
 }
 
 /* ------------------------------------------------------------ alertas */
-function tocarBipe() {
+/* Dois toques com desenho oposto, e de propósito: a queda são três notas
+   quadradas repetidas na mesma altura — o som de alarme; a volta são duas
+   notas senoidais SUBINDO, mais baixas. Mesmo de outro cômodo e sem olhar a
+   tela dá para saber se a notícia é boa ou ruim, antes de a voz confirmar. */
+const TOQUES = {
+  queda: { onda: 'square', vol: 0.22, notas: [[880, 0, 0.2], [880, 0.28, 0.2], [880, 0.56, 0.2]] },
+  volta: { onda: 'sine',   vol: 0.16, notas: [[660, 0, 0.16], [990, 0.18, 0.3]] },
+};
+
+function tocarBipe(tipo) {
   if (!estado.somOn || estado.silenciado) return;
+  const t = TOQUES[tipo] || TOQUES.queda;
   try {
     if (!estado.audioCtx) estado.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const ctx = estado.audioCtx;
     if (ctx.state === 'suspended') ctx.resume();
-    [0, 0.28, 0.56].forEach((atraso) => {
+    t.notas.forEach(([hz, atraso, dur]) => {
       const osc = ctx.createOscillator(), gan = ctx.createGain();
-      osc.type = 'square';
-      osc.frequency.value = 880;
+      osc.type = t.onda;
+      osc.frequency.value = hz;
       gan.gain.setValueAtTime(0.0001, ctx.currentTime + atraso);
-      gan.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + atraso + 0.02);
-      gan.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + atraso + 0.2);
+      gan.gain.exponentialRampToValueAtTime(t.vol, ctx.currentTime + atraso + 0.02);
+      gan.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + atraso + dur);
       osc.connect(gan); gan.connect(ctx.destination);
       osc.start(ctx.currentTime + atraso);
-      osc.stop(ctx.currentTime + atraso + 0.22);
+      osc.stop(ctx.currentTime + atraso + dur + 0.02);
     });
   } catch (e) { /* sem áudio disponível */ }
 }
@@ -1624,6 +1645,139 @@ function notificar(titulo, corpo) {
       new Notification(titulo, { body: corpo, tag: 'netmon', renotify: true });
     }
   } catch (e) { /* navegador bloqueou */ }
+}
+
+/* ------------------------------------------------------------ voz
+   O bipe avisa que ALGUMA COISA aconteceu; a voz diz o quê e com quem. Esta
+   página vive numa aba atrás das outras — três notas de 880 Hz não distinguem
+   "a GIGA caiu" de "a IMPACTO voltou", e é justamente essa a informação que
+   faz alguém largar o que está fazendo.
+
+   Os nomes falados não são os nomes de tela: o usuário chama a IMPACTO de
+   "Impacta" e é assim que ele quer ouvir. Escrito segue IMPACTO, que é o nome
+   da operadora no contrato e nos relatórios em PDF. */
+const FALA_LINK = { GIGA: 'Giga', IMPACTO: 'Impacta', ROTEADOR: 'Roteador' };
+const nomeFalado = (nome) => FALA_LINK[nome] || nome;
+
+const temVoz = () =>
+  'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+
+/* A lista de vozes chega vazia na primeira chamada em quase todo navegador —
+   ela é preenchida de forma assíncrona e avisa pelo evento `voiceschanged`.
+   Por isso a busca é refeita a cada fala em vez de guardada numa constante. */
+function vozPtBr() {
+  let vozes = [];
+  try { vozes = window.speechSynthesis.getVoices() || []; } catch (e) { return null; }
+  return vozes.find((v) => /^pt[-_]br/i.test(v.lang))
+      || vozes.find((v) => /^pt/i.test(v.lang))
+      || null;
+}
+
+function falar(texto) {
+  if (!estado.vozOn || estado.silenciado || !temVoz()) return;
+  try {
+    const u = new SpeechSynthesisUtterance(texto);
+    const v = vozPtBr();
+    if (v) u.voice = v;
+    u.lang = (v && v.lang) || 'pt-BR';
+    u.rate = 0.97;
+    u.volume = 1;
+    // o Chrome deixa a fila suspensa quando a aba fica muito tempo em segundo
+    // plano; sem este resume() o aviso só sairia quando a aba voltasse — que é
+    // exatamente quando ele não serve mais para nada
+    window.speechSynthesis.resume();
+    window.speechSynthesis.speak(u);
+  } catch (e) { /* navegador sem síntese de voz */ }
+}
+
+/* Autoplay: Chrome e Safari só liberam áudio e voz depois que a pessoa tocou
+   na página uma vez. Como o aviso da queda tem de sair sozinho, destravamos os
+   dois no primeiro gesto, qualquer que seja — e de quebra é o momento certo
+   para pedir a permissão de notificação, que também prefere um gesto. */
+function destravarAvisos() {
+  try {
+    if (!estado.audioCtx) {
+      estado.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (estado.audioCtx.state === 'suspended') estado.audioCtx.resume();
+  } catch (e) { /* sem áudio disponível */ }
+  if (temVoz() && !estado.vozDestravada) {
+    try {
+      const u = new SpeechSynthesisUtterance(' ');
+      u.volume = 0;
+      window.speechSynthesis.speak(u);
+      estado.vozDestravada = true;
+    } catch (e) { /* sem voz */ }
+  }
+  pedirNotificacoes();
+}
+
+/* Notificação e som vêm LIGADOS de fábrica. A permissão do navegador, porém,
+   não se liga por configuração nenhuma: só o usuário a concede. Então pedimos
+   sozinhos — na carga e de novo no primeiro gesto, porque parte dos
+   navegadores ignora o pedido que não vem de uma interação. */
+async function pedirNotificacoes() {
+  if (!('Notification' in window)) { renderBotaoNotif('sem-suporte'); return 'sem-suporte'; }
+  let p = Notification.permission;
+  if (p === 'default') {
+    try { p = await Notification.requestPermission(); } catch (e) { p = Notification.permission; }
+  }
+  renderBotaoNotif(p);
+  return p;
+}
+
+function renderBotaoNotif(p) {
+  const b = $('btn-notif');
+  if (!b) return;
+  if (p === 'sem-suporte') {
+    b.textContent = 'sem notificações neste navegador';
+    b.title = 'este navegador não tem a API de notificação';
+    b.disabled = true;
+    return;
+  }
+  if (p === 'granted') {
+    b.textContent = '🔔 avisos ligados';
+    b.title = 'notificação, som e voz ativos — clique para testar os três';
+  } else if (p === 'denied') {
+    b.textContent = '🔕 notificações bloqueadas';
+    b.title = 'o navegador bloqueou as notificações deste site; libere no cadeado '
+            + 'da barra de endereço. O som e a voz continuam funcionando.';
+  } else {
+    b.textContent = 'Ativar notificações';
+    b.title = 'permitir que o navegador avise mesmo com a aba fechada';
+  }
+}
+
+/* ------------------------------------------------------------ temperatura
+   O painel vigiava a internet e não vigiava o aparelho que faz a vigilância.
+   Este Orange Pi não tem cooler: passando dos 75 °C o kernel corta o clock, a
+   sondagem de 2 em 2 segundos atrasa e o jitter medido sobe — o painel acusaria
+   um problema de internet que é febre do próprio medidor. */
+const NIVEL_TEMP = {
+  ok:      { cls: 'temp-ok',      icone: '🌡️', diz: 'temperatura normal' },
+  morno:   { cls: 'temp-morno',   icone: '🌡️', diz: 'esquentando — ainda sem prejuízo' },
+  quente:  { cls: 'temp-quente',  icone: '🔥', diz: 'o kernel já está cortando o clock da CPU' },
+  critico: { cls: 'temp-critico', icone: '🔥', diz: 'perto do desligamento térmico — olhe a ventilação' },
+  sem:     { cls: 'temp-sem',     icone: '🌡️', diz: 'este aparelho não expõe sensor de temperatura' },
+};
+
+function renderSistema(sis) {
+  const el = $('cpu-temp');
+  if (!el || !sis) return;
+  estado.sistema = sis;
+  const n = NIVEL_TEMP[sis.nivel] || NIVEL_TEMP.sem;
+  el.className = 'pill temp-pill ' + n.cls;
+  el.innerHTML = `${n.icone} <b>${sis.cpu_c == null ? '—' : nf(sis.cpu_c, 1) + ' °C'}</b>`;
+  const linhas = ['CPU do Orange Pi: ' + n.diz];
+  if (sis.cpu_c != null) linhas.push(`CPU ${nf(sis.cpu_c, 1)} °C`);
+  if (sis.gpu_c != null) linhas.push(`GPU ${nf(sis.gpu_c, 1)} °C`);
+  if (sis.mhz) linhas.push(`clock ${sis.mhz} MHz${sis.mhz_max ? ` de ${sis.mhz_max} MHz` : ''}`);
+  if (sis.carga != null) linhas.push(`carga ${nf(sis.carga, 2)} em ${sis.nucleos} núcleos`);
+  if (sis.quente_c) {
+    linhas.push(`corte de clock a partir de ${nf(sis.quente_c, 0)} °C`
+      + `, crítico em ${nf(sis.critico_c, 0)} °C`);
+  }
+  el.title = linhas.join('\n');
 }
 
 /* Deriva o banner do estado atual: se você abrir a página com um link caído,
@@ -1692,6 +1846,7 @@ function conectar() {
     if (mudou) { preencherFiltrosDeLink(); montarLegenda(); }
     renderCards(d.links);
     renderDnsLan(d.dns_lan);
+    renderSistema(d.sistema);
     atualizarBanner(d.links);
     if (estado.serieAtual) {
       nomesLinks().forEach((n) =>
@@ -1752,8 +1907,13 @@ function conectar() {
     if (a.event === 'queda') {
       estado.silenciado = false;
       tocarBipe();
+      // a fala espera o bipe terminar (três notas, ~0,8 s): sobrepostos, um
+      // abafa o outro e não se entende nem o aviso nem o nome do link
+      setTimeout(() => falar(nomeFalado(a.link) + ' caiu'), 900);
       notificar('🔴 ' + a.link + ' caiu', a.mensagem);
     } else if (a.event === 'recuperacao') {
+      tocarBipe('volta');
+      setTimeout(() => falar(nomeFalado(a.link) + ' voltou'), 600);
       notificar('🟢 ' + a.link + ' voltou', a.mensagem);
     }
     carregarEventos();
@@ -1863,6 +2023,7 @@ async function carregarConfig() {
     $('c-jit').value = parseFloat(c.jitter_limiar_ms);
     $('c-cool').value = parseFloat(c.cooldown_s);
     $('c-som').checked = c.som_habilitado === '1';
+    $('c-voz').checked = c.voz_habilitada !== '0';
     $('c-auto-on').checked = c.auto_speed_enabled === '1';
     $('c-auto-hora').value = c.auto_speed_hora || '04:00';
     $('c-auto-dur').value = parseFloat(c.auto_speed_dur) || 5;
@@ -1872,6 +2033,7 @@ async function carregarConfig() {
     estado.cfgScanRede = c.auto_scan_rede || '';
     renderRedesConfig();
     estado.somOn = c.som_habilitado === '1';
+    estado.vozOn = c.voz_habilitada !== '0';
     estado.limiares = {
       lat: parseFloat(c.lat_limiar_ms) || 80,
       loss: parseFloat(c.loss_limiar_pct) || 20,
@@ -1889,6 +2051,7 @@ async function salvarConfig() {
     jitter_limiar_ms: $('c-jit').value,
     cooldown_s: $('c-cool').value,
     som_habilitado: $('c-som').checked ? '1' : '0',
+    voz_habilitada: $('c-voz').checked ? '1' : '0',
     auto_speed_enabled: $('c-auto-on').checked ? '1' : '0',
     auto_speed_hora: $('c-auto-hora').value || '04:00',
     auto_speed_dur: $('c-auto-dur').value,
@@ -1905,6 +2068,7 @@ async function salvarConfig() {
     const j = await r.json();
     if (!r.ok) throw new Error(j.erro || 'erro');
     estado.somOn = j.som_habilitado === '1';
+    estado.vozOn = j.voz_habilitada !== '0';
     estado.limiares = {
       lat: parseFloat(j.lat_limiar_ms) || 80,
       loss: parseFloat(j.loss_limiar_pct) || 20,
@@ -2042,59 +2206,135 @@ const CONEXAO = {
   desconhecida: { chip: '— sem medida', cls: 'c-desconhecida' },
 };
 
-function linhaScan(h, modoPortas) {
+/* ------------------------------------------------------------ aparelhos
+   Isto era uma tabela de oito colunas e não cabia em lugar nenhum. As células
+   tinham conteúdo de tamanhos incompatíveis — um nome curto ao lado de três
+   etiquetas, um MAC de dezessete caracteres, uma lista de portas que quebrava
+   em quatro linhas — e o resultado eram colunas de larguras aleatórias e
+   linhas de alturas diferentes, com o olho sem nenhuma régua para descer.
+   Cartão resolve na raiz: cada aparelho é um bloco fechado, todos do mesmo
+   feitio, e a mesma marcação serve o celular e o monitor grande.
+
+   A ordem padrão é por LATÊNCIA, do mais lento para o mais rápido. A ordem por
+   IP de antes era a ordem em que a varredura respondeu, não uma ordem que
+   responda a alguma pergunta. "Quem está devagar na minha rede?" é a pergunta
+   que se faz aqui, e a resposta passa a ser simplesmente: os primeiros. */
+const semLat = (h) => h.rtt_ms === null || h.rtt_ms === undefined;
+
+const ipNum = (ip) => String(ip || '').split('.')
+  .reduce((n, o) => n * 256 + (parseInt(o, 10) || 0), 0);
+
+const nomeDe = (h) => (h.apelido || h.nome || h.tipo || h.ip || '').toLowerCase();
+
+// 2 = estreou nesta varredura, 1 = chegou na semana, 0 = já morava aqui
+const novidade = (h) => (h.novo ? 2 : h.novo_semana ? 1 : 0);
+
+/* Sem medida vai sempre para o fim, nas duas direções: "não respondeu" não é
+   latência baixa nem alta, é ausência de informação, e misturar as duas coisas
+   faria o aparelho calado parecer o mais rápido da casa. */
+const ORDENS = {
+  lat: (a, b) => (semLat(a) - semLat(b)) || ((b.rtt_ms || 0) - (a.rtt_ms || 0))
+                 || (ipNum(a.ip) - ipNum(b.ip)),
+  'lat-asc': (a, b) => (semLat(a) - semLat(b)) || ((a.rtt_ms || 0) - (b.rtt_ms || 0))
+                 || (ipNum(a.ip) - ipNum(b.ip)),
+  novo: (a, b) => (novidade(b) - novidade(a)) || ORDENS.lat(a, b),
+  ip: (a, b) => ipNum(a.ip) - ipNum(b.ip),
+  nome: (a, b) => nomeDe(a).localeCompare(nomeDe(b), 'pt-BR'),
+};
+const CHAVE_ORDEM = 'netmon.scan.ordem';
+
+// Faixas absolutas, não relativas ao resto da rede: 120 ms continuam ruins
+// numa casa onde todo mundo está ruim.
+const classeLat = (v) =>
+  v == null ? 'lat-sem' : v <= 10 ? 'lat-bom' : v <= 50 ? 'lat-medio' : 'lat-ruim';
+
+function cartaoAparelho(h, modoPortas, maxLat) {
   const con = CONEXAO[h.conexao] || CONEXAO.desconhecida;
-  const nome = h.apelido || h.nome || h.tipo || '—';
-  const marcas = [];
-  if (h.eu) marcas.push('<span class="tag tag-eu">este aparelho</span>');
-  if (h.gateway) marcas.push('<span class="tag tag-gw">roteador</span>');
+  const nome = h.apelido || h.nome || h.tipo || h.ip || '—';
   /* Duas novidades diferentes, e a distinção importa. `novo` é "estreou NESTA
      varredura" e some na próxima. `novo_semana` é "chegou nos últimos 7 dias" e
      é o que o usuário quer ver de relance — por isso é ele que ganha o ouro.
      Quem já estava aqui quando o netmon começou a olhar não conta como
      novidade: foi encontrado, não chegou. */
-  if (h.novo) marcas.push('<span class="tag tag-novo">estreou agora</span>');
-  else if (h.novo_semana) marcas.push(`<span class="tag tag-semana" title="primeira vez visto ${fmtDataHora(h.primeiro_visto)}">✨ novo na semana</span>`);
+  const marcas = [];
+  if (h.eu) marcas.push('<span class="tag tag-eu">este aparelho</span>');
+  if (h.gateway) marcas.push('<span class="tag tag-gw">roteador</span>');
+  if (h.novo) marcas.push('<span class="tag tag-novo">✨ estreou agora</span>');
+  else if (h.novo_semana) {
+    marcas.push('<span class="tag tag-semana" title="primeira vez visto '
+      + `${escTxt(fmtDataHora(h.primeiro_visto))}">✨ novo na semana</span>`);
+  }
   if (h.mac_aleatorio && !h.eu) {
     marcas.push('<span class="tag tag-rand" title="MAC administrado localmente: '
       + 'o aparelho sorteia um endereço por rede, então o fabricante não pode ser '
       + 'identificado. É o padrão de celulares modernos.">MAC aleatório</span>');
   }
+
+  // o subtítulo não repete o que já virou nome do cartão
+  const sub = [h.apelido ? (h.nome || h.tipo) : (nome === h.tipo ? null : h.tipo),
+               h.vendor].filter((x) => x && x !== nome);
+
   const portas = (h.portas || []).length
     ? h.portas.map((p) => `<span class="porta" title="${escTxt(p.servico || '')}">${p.porta}${
         p.servico ? ` <small>${escTxt(p.servico)}</small>` : ''}</span>`).join('')
-    : (modoPortas === 'nenhuma'
-        ? '<span class="muted">não olhadas</span>'
-        : '<span class="muted">nenhuma aberta entre as olhadas</span>');
-  const lat = h.rtt_ms == null ? '<span class="muted">—</span>'
-    : `${nf(h.rtt_ms, 2)} ms${h.jitter_ms == null ? '' : ` <small class="muted">±${nf(h.jitter_ms, 2)}</small>`}`;
+    : `<span class="muted">${modoPortas === 'nenhuma'
+        ? 'não olhadas' : 'nenhuma aberta entre as olhadas'}</span>`;
+
+  // a barra é o aparelho contra o MAIS LENTO da rede: é o que transforma a
+  // ordenação em algo que se lê sem comparar números um a um
+  const pct = semLat(h) ? 0 : Math.max(4, Math.round((h.rtt_ms / (maxLat || h.rtt_ms)) * 100));
+  const lat = semLat(h)
+    ? '<span class="sc-sem">sem medida</span>'
+    : `<b>${nf(h.rtt_ms, h.rtt_ms < 10 ? 2 : 1)}</b><span class="sc-un">ms</span>`
+      + (h.jitter_ms == null ? '' : `<small>±${nf(h.jitter_ms, 1)}</small>`);
+
   const desde = h.primeiro_visto
     ? `${fmtDataHora(h.primeiro_visto)}${h.idade_s != null && h.idade_s < 7 * 86400
-        ? ` <small class="ouro-tx">(há ${fmtDur(h.idade_s)})</small>` : ''}`
-    : '—';
-  return `<tr class="${h.eu ? 'linha-eu' : ''}${h.novo || h.novo_semana ? ' linha-nova' : ''}">
-    <td data-rot="Aparelho"><button class="sc-nome" type="button" data-mac="${escTxt(h.mac || '')}"
-          title="clique para dar um apelido a este aparelho">${escTxt(nome)}</button>
-      ${h.apelido && h.tipo ? `<small class="muted">${escTxt(h.tipo)}</small>` : ''}
-      ${marcas.join('')}</td>
-    <td data-rot="IP"><code>${escTxt(h.ip)}</code></td>
-    <td data-rot="MAC"><code class="mac">${escTxt(h.mac || '—')}</code></td>
-    <td data-rot="Fabricante">${escTxt(h.vendor || '—')}</td>
-    <td data-rot="Conexão"><span class="chip-con ${con.cls}" title="${escTxt(h.conexao_motivo || '')}">${con.chip}</span></td>
-    <td data-rot="Latência">${lat}</td>
-    <td data-rot="Portas abertas" class="cel-portas">${portas}</td>
-    <td data-rot="Conhecido desde">${desde}</td>
-  </tr>`;
+        ? ` <span class="ouro-tx">(há ${fmtDur(h.idade_s)})</span>` : ''}`
+    : '<span class="muted">—</span>';
+
+  return `<article class="sc-card${h.novo || h.novo_semana ? ' sc-nova' : ''}${
+      h.eu ? ' sc-eu' : ''}">
+    <div class="sc-topo">
+      <div class="sc-id">
+        <button class="sc-nome" type="button" data-mac="${escTxt(h.mac || '')}"
+                title="clique para dar um apelido a este aparelho">${escTxt(nome)}</button>
+        ${sub.length ? `<p class="sc-sub">${escTxt(sub.join(' · '))}</p>` : ''}
+      </div>
+      <div class="sc-lat ${classeLat(h.rtt_ms)}"
+           title="${semLat(h) ? 'não respondeu ao ping; só apareceu no ARP'
+                              : 'latência média · variação (jitter)'}">${lat}</div>
+    </div>
+    <div class="sc-medidor" aria-hidden="true"><i style="width:${pct}%"></i></div>
+    ${marcas.length ? `<div class="sc-marcas">${marcas.join('')}</div>` : ''}
+    <dl class="sc-campos">
+      <div><dt>IP</dt><dd><code>${escTxt(h.ip)}</code></dd></div>
+      <div><dt>MAC</dt><dd><code class="mac">${escTxt(h.mac || '—')}</code></dd></div>
+      <div><dt>Conexão</dt><dd><span class="chip-con ${con.cls}"
+           title="${escTxt(h.conexao_motivo || '')}">${con.chip}</span></dd></div>
+      <div><dt>Conhecido desde</dt><dd>${desde}</dd></div>
+      <div class="sc-portas"><dt>Portas abertas</dt><dd>${portas}</dd></div>
+    </dl>
+  </article>`;
+}
+
+function ordemEscolhida() {
+  const sel = $('sc-ordem');
+  const v = (sel && sel.value) || 'lat';
+  return ORDENS[v] ? v : 'lat';
 }
 
 function renderScan() {
-  const tb = $('tab-scan') && $('tab-scan').querySelector('tbody');
-  if (!tb) return;
+  const box = $('sc-grid');
+  if (!box) return;
   const r = estado.scan.rodando || estado.scan.ultimo;
-  const hosts = (r && r.hosts) || [];
-  tb.innerHTML = hosts.length
-    ? hosts.map((h) => linhaScan(h, r.modo_portas)).join('')
-    : '<tr><td colspan="8" class="muted vazio">Nenhuma varredura ainda — escolha a rede e clique em Varrer.</td></tr>';
+  const hosts = ((r && r.hosts) || []).slice().sort(ORDENS[ordemEscolhida()]);
+  const maxLat = hosts.reduce((m, h) => Math.max(m, h.rtt_ms || 0), 0);
+  box.innerHTML = hosts.length
+    ? hosts.map((h) => cartaoAparelho(h, r.modo_portas, maxLat)).join('')
+    : `<p class="muted vazio">${estado.scan.rodando
+        ? 'procurando aparelhos…'
+        : 'Nenhuma varredura ainda — escolha a rede e clique em Varrer a rede.'}</p>`;
 
   const msg = $('sc-msg');
   if (msg && r) {
@@ -2105,7 +2345,7 @@ function renderScan() {
       const wifi = hosts.filter((h) => h.conexao === 'wifi').length;
       const cabo = hosts.filter((h) => h.conexao === 'cabo').length;
       const novos = hosts.filter((h) => h.novo_semana || h.novo).length;
-      msg.innerHTML = `${hosts.length} aparelho(s) em <b>${escTxt(r.rede ? r.rede.cidr : '')}</b>`
+      msg.innerHTML = `<b>${hosts.length}</b> aparelho(s) em <b>${escTxt(r.rede ? r.rede.cidr : '')}</b>`
         + ` · ${cabo} por cabo, ${wifi} por Wi-Fi`
         + (novos ? ` · <b class="ouro-tx">${novos} novo(s) na semana</b>` : '')
         + ` · varredura de ${fmtDataHora(r.ts)}${r.duracao_s ? ` (levou ${r.duracao_s}s)` : ''}`
@@ -2295,8 +2535,11 @@ function ligarEventos() {
 
   $('btn-silenciar').addEventListener('click', () => {
     estado.silenciado = true;
-    $('btn-silenciar').textContent = 'Som silenciado';
-    setTimeout(() => { $('btn-silenciar').textContent = 'Silenciar som'; }, 3000);
+    // cala o bipe E a fala: quem aperta "silenciar" no meio de uma queda quer
+    // silêncio, não trocar um aviso sonoro por outro
+    try { window.speechSynthesis.cancel(); } catch (e) { /* sem voz */ }
+    $('btn-silenciar').textContent = 'Silenciado';
+    setTimeout(() => { $('btn-silenciar').textContent = 'Silenciar som e voz'; }, 3000);
   });
   $('btn-fechar-alerta').addEventListener('click', () => {
     $('alerta').classList.add('oculto');
@@ -2304,11 +2547,14 @@ function ligarEventos() {
   });
 
   $('btn-notif').addEventListener('click', async () => {
-    if (!('Notification' in window)) { $('btn-notif').textContent = 'sem suporte'; return; }
-    const p = await Notification.requestPermission();
-    $('btn-notif').textContent = p === 'granted' ? '🔔 notificações ativas' : '🔕 bloqueadas';
-    if (p === 'granted') notificar('netmon', 'Notificações ativadas. Você será avisado nas quedas.');
-    if (!estado.audioCtx) tocarBipe();   // destrava o áudio no gesto do usuário
+    destravarAvisos();                   // gesto do usuário: é aqui que dá para destravar
+    const p = await pedirNotificacoes();
+    if (p === 'granted') {
+      notificar('netmon', 'Avisos ligados. Você será avisado nas quedas e nos retornos.');
+    }
+    estado.silenciado = false;
+    tocarBipe('volta');
+    setTimeout(() => falar('Aviso por voz ligado'), 700);
   });
 
   $('f-link').addEventListener('change', () => { estado.offset = 0; carregarEventos(); });
@@ -2371,10 +2617,19 @@ function ligarEventos() {
            'aparelhos-na-rede.pdf', 'Inventário da rede', ev.currentTarget);
   });
   liga('sc-rede', 'change', () => carregarScan($('sc-rede').value));
-  liga('tab-scan', 'click', (ev) => {
+  liga('sc-grid', 'click', (ev) => {
     const b = ev.target.closest('.sc-nome');
     if (b) apelidarAparelho(b.dataset.mac);
   });
+  liga('sc-ordem', 'change', () => {
+    try { localStorage.setItem(CHAVE_ORDEM, $('sc-ordem').value); } catch (e) { /* sem persistência */ }
+    renderScan();
+  });
+  // a ordem escolhida sobrevive ao F5, como o período
+  try {
+    const ord = localStorage.getItem(CHAVE_ORDEM);
+    if (ord && ORDENS[ord] && $('sc-ordem')) $('sc-ordem').value = ord;
+  } catch (e) { /* segue no padrão */ }
 
   $('mesh-toggle').addEventListener('click', alternarMesh);
   $('tr-rodar').addEventListener('click', rodarTrace);
@@ -2405,9 +2660,22 @@ function ligarEventos() {
     });
   }
 
-  if ('Notification' in window && Notification.permission === 'granted') {
-    $('btn-notif').textContent = '🔔 notificações ativas';
+  // Um gesto qualquer serve, e serve uma vez só: é o que os navegadores pedem
+  // para liberar áudio e voz. Sem isso o primeiro aviso de queda sairia mudo.
+  ['pointerdown', 'keydown', 'touchstart'].forEach((ev) =>
+    window.addEventListener(ev, destravarAvisos, { once: true, passive: true }));
+
+  // a lista de vozes chega depois da página; quando chegar, o rótulo do botão
+  // já pode dizer a verdade sobre o que este navegador consegue falar
+  if (temVoz() && 'onvoiceschanged' in window.speechSynthesis) {
+    window.speechSynthesis.addEventListener('voiceschanged', () => {
+      if (!vozPtBr()) {
+        console.warn('netmon: nenhuma voz em português instalada neste navegador');
+      }
+    }, { once: true });
   }
+
+  renderBotaoNotif('Notification' in window ? Notification.permission : 'sem-suporte');
 }
 
 /* Cadência de recarga: uma janela de 30 s precisa ser redesenhada a cada ciclo
@@ -2416,11 +2684,15 @@ function agendarAtualizacoes() {
   clearInterval(estado.timers.graficos);
   clearInterval(estado.timers.resumo);
   const span = janela().span;
-  // três cadências: ao vivo acompanha a sondagem; janelas de até uma hora
-  // envelhecem rápido o bastante para valer 10 s; o resto é história e não
-  // muda de figura em um minuto
-  const graf = span <= SPAN_CURTO ? 2000 : span <= 3600 ? 10000 : 60000;
-  const res = span <= SPAN_CURTO ? 5000 : span <= 3600 ? 20000 : 60000;
+  // Quatro cadências. "Ao vivo" é caso à parte: a janela é longa (2 h, ~3600
+  // pontos por link) mas tem de acompanhar o relógio, então recarrega a cada
+  // 10 s — a cada 2 s seriam 500 KB de JSON por recarga só para mover a linha
+  // um pixel, e quem anda de segundo em segundo ali são os cartões, que já vêm
+  // pelo SSE. Janelas curtas de verdade acompanham a sondagem; o resto é
+  // história e não muda de figura em um minuto.
+  const p = periodoAtual();
+  const graf = p.vivo ? 10000 : span <= SPAN_CURTO ? 2000 : span <= 3600 ? 10000 : 60000;
+  const res = p.vivo ? 15000 : span <= SPAN_CURTO ? 5000 : span <= 3600 ? 20000 : 60000;
   estado.timers.graficos = setInterval(carregarGraficos, graf);
   estado.timers.resumo = setInterval(carregarResumo, res);
 }
@@ -2458,6 +2730,7 @@ async function iniciar() {
     montarLegenda();
     renderCards(s.links);
     renderDnsLan(s.dns_lan);
+    renderSistema(s.sistema);
     atualizarBanner(s.links);
     $('rodape-info').textContent =
       `netmon · servidor no ar há ${fmtDurLonga(s.servidor_uptime_s)} · porta ${s.porta}` +
@@ -2467,6 +2740,10 @@ async function iniciar() {
                      carregarVelocidade(), carregarTrace(), carregarAlvos(),
                      carregarMesh(), carregarScan(), carregarLogScan()]);
   conectar();
+  // som e notificação vêm ligados de fábrica: a permissão é pedida na carga, e
+  // de novo no primeiro gesto para os navegadores que só a concedem por
+  // interação (ligarEventos cuida disso)
+  pedirNotificacoes();
   if (!secaoRecolhida('Configurações e alertas')) carregarIfaces();
   setInterval(relogio, 1000);
   setInterval(carregarEventos, 60000);

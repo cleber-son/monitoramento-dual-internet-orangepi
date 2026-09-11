@@ -681,6 +681,33 @@ def migrar_fundadores():
              len(tabela), len(vistas))
 
 
+def _ip_num(ip):
+    try:
+        a, b, c, d = (int(o) for o in str(ip).split("."))
+        return (a << 24) | (b << 16) | (c << 8) | d
+    except (ValueError, AttributeError):
+        return 0
+
+
+def ordenar(hosts):
+    """Da lentidao para a rapidez, e nunca por IP.
+
+    A ordem por IP era a ordem da varredura, nao uma ordem util: 192.168.0.7
+    vir antes de 192.168.0.12 nao diz nada a ninguem. Quem abre esta lista quer
+    saber QUEM esta puxando a rede, e isso e a latencia -- o aparelho de 180 ms
+    no Wi-Fi do fundo da casa tem de ser o primeiro da lista, nao o vigesimo.
+
+    Quem nao respondeu ao ping vai para o fim: "sem medida" nao e latencia
+    baixa, e ausencia de informacao, e ordenar um ao lado do outro misturaria
+    as duas coisas. Empate desempata pelo IP, para a lista nao dancar entre uma
+    leitura e outra.
+    """
+    hosts.sort(key=lambda h: (h.get("rtt_ms") is None,
+                              -(h.get("rtt_ms") or 0.0),
+                              _ip_num(h.get("ip"))))
+    return hosts
+
+
 def _registrar(hosts, rede_id=None):
     """Grava quem foi visto e devolve o conjunto dos que sao novidade.
 
@@ -777,6 +804,7 @@ def ultimo(rede_id):
             h["apelido"] = reg.get("nome")
             h["primeiro_visto"] = reg.get("primeiro")
     marcar_novidade(d.get("hosts") or [])
+    ordenar(d.get("hosts") or [])
     return d
 
 
@@ -905,6 +933,7 @@ def varrer(app, rede_id=None, modo_portas="rapido", origem="manual"):
             h["vendor"] = marcas.get(h["mac"])
             h["tipo"] = palpite(h["vendor"], h["portas"], h["gateway"], h["eu"])
 
+        ordenar(r["hosts"])
         novos_macs = _registrar(r["hosts"], rede["id"])
         r["ok"] = True
         r["fase"] = "fim"

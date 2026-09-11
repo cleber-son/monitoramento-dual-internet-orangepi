@@ -18,6 +18,7 @@ import db
 import speedtest
 import mesh as mesh_mod
 import scan as scan_mod
+import sistema as sistema_mod
 import trace as trace_mod
 
 log = logging.getLogger("netmon.server")
@@ -200,6 +201,8 @@ class Handler(BaseHTTPRequestHandler):
             "inicio_dados": inicio_dados(),
             "dns_lan": (self.app["dns_lan"].snapshot()
                          if self.app.get("dns_lan") else None),
+            # saude do proprio Orange Pi: o cabecalho mostra a temperatura da CPU
+            "sistema": sistema_mod.snapshot(),
         })
 
     def api_samples(self):
@@ -329,6 +332,7 @@ class Handler(BaseHTTPRequestHandler):
     def api_config_post(self, data):
         permitido = {"webhook_url", "webhook_enabled", "lat_limiar_ms",
                      "loss_limiar_pct", "jitter_limiar_ms", "som_habilitado",
+                     "voz_habilitada",
                      "cooldown_s", "auto_speed_enabled", "auto_speed_hora",
                      "auto_speed_dur", "auto_scan_enabled", "auto_scan_hora",
                      "auto_scan_portas", "auto_scan_rede"}
@@ -372,8 +376,8 @@ class Handler(BaseHTTPRequestHandler):
                 # um id de rede que sumiu com a troca de placa nao pode travar
                 # o agendador, ele so cai de volta para a LAN
                 v = str(v or "").strip()[:120]
-            if k in ("webhook_enabled", "som_habilitado", "auto_speed_enabled",
-                     "auto_scan_enabled"):
+            if k in ("webhook_enabled", "som_habilitado", "voz_habilitada",
+                     "auto_speed_enabled", "auto_scan_enabled"):
                 v = "1" if str(v) in ("1", "true", "True", "on") else "0"
             pairs[k] = v
         if not pairs:

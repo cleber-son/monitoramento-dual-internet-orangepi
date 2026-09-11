@@ -131,6 +131,11 @@ DEFAULT_CONFIG = {
     "loss_limiar_pct": "20",
     "jitter_limiar_ms": "60",
     "som_habilitado": "1",
+    # A pagina fala em voz alta "Giga caiu" / "Impacta voltou" quando um link
+    # muda de estado. Ligada de fabrica junto com o som: o painel costuma ficar
+    # aberto numa aba atras das outras, e la um bipe de tres notas nao diz QUAL
+    # link caiu -- a fala diz.
+    "voz_habilitada": "1",
     "cooldown_s": "300",
     # Teste de velocidade automatico: todo dia de madrugada, um link de cada
     # vez. As 4h porque a casa esta dormindo -- o teste satura o link de

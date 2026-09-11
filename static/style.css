@@ -112,6 +112,20 @@ main {
 .pill-off { color: #ffb3b3; border-color: rgba(255,90,90,.55); background: rgba(255,90,90,.18); }
 .pill-neutro { color: var(--ink-2); border-color: var(--borda-forte); background: rgba(147,163,192,.14); }
 
+/* Temperatura da CPU do Orange Pi. Quatro estados, e a cor nunca vem sozinha:
+   o número em graus está sempre escrito, e a partir de "quente" o ícone troca
+   de 🌡️ para 🔥 — quem não distingue vermelho de verde ainda vê a mudança. */
+.temp-pill { font-variant-numeric: tabular-nums; }
+.temp-pill b { font-weight: 680; }
+.temp-ok      { color: #8ef0b6; border-color: rgba(46,204,113,.45); background: rgba(46,204,113,.13); }
+.temp-morno   { color: #ffd479; border-color: rgba(255,197,49,.45); background: rgba(255,197,49,.13); }
+.temp-quente  { color: #ffc09a; border-color: rgba(255,157,92,.60); background: rgba(255,157,92,.18); }
+.temp-critico { color: #ffb3b3; border-color: rgba(255,90,90,.70); background: rgba(255,90,90,.20);
+                animation: pulso-temp 1.6s ease-in-out infinite; }
+.temp-sem     { color: var(--muted); }
+@keyframes pulso-temp { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .temp-critico { animation: none; } }
+
 /* ------------------------------------------------------------ alerta */
 .alerta {
   position: sticky;
@@ -1169,8 +1183,6 @@ main > .painel:nth-of-type(5n+5) { --acento: #ffc531; --acento-2: #ff9d5c; }
   background: linear-gradient(90deg, var(--acento), var(--acento-2));
   transition: width .3s ease;
 }
-.tabela-scan code { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 0.82rem; }
-.tabela-scan .mac { color: var(--muted); }
 .sc-nome {
   background: none;
   border: none;
@@ -1183,7 +1195,6 @@ main > .painel:nth-of-type(5n+5) { --acento: #ffc531; --acento-2: #ff9d5c; }
   text-align: left;
 }
 .sc-nome:hover { color: var(--acento); border-color: var(--acento); }
-.tabela-scan td[data-rot="Aparelho"] small { display: block; color: var(--muted); font-size: 0.75rem; }
 .chip-con { font-size: 0.76rem; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
 .c-cabo { background: rgba(46, 204, 113, .16); color: #8ef0b6; }
 .c-wifi { background: rgba(77, 163, 255, .16); color: #9fd0ff; }
@@ -1228,12 +1239,136 @@ main > .painel:nth-of-type(5n+5) { --acento: #ffc531; --acento-2: #ff9d5c; }
 }
 .ouro-tx { color: var(--ouro-tinta); font-variant-numeric: tabular-nums; }
 .erro-tx { color: #ffb3b3; }
-.tabela-scan tbody tr.linha-eu { background: rgba(77, 163, 255, .05); }
 .tabela tbody tr.linha-nova {
   background: var(--ouro-fraco);
   box-shadow: inset 4px 0 0 var(--ouro);
 }
-.tabela tbody tr.linha-nova .sc-nome { color: var(--ouro-tinta); }
+/* ------------------------------------------------------------ aparelhos
+   Era uma tabela de oito colunas com células de tamanhos incompatíveis: nome
+   curto ao lado de três etiquetas, MAC de dezessete caracteres, lista de
+   portas quebrando em quatro linhas. Colunas de largura aleatória, linhas de
+   altura diferente e nenhuma régua para o olho descer — "tudo torto", e com
+   razão. Cartão de largura fixa resolve na raiz, e a mesma marcação serve o
+   celular e o monitor grande, sem um segundo layout escondido num @media. */
+.sc-lista-topo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+}
+.sc-lista-topo #sc-msg { margin: 0 0 3px; flex: 1 1 260px; }
+
+.sc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.sc-grid > .vazio { grid-column: 1 / -1; text-align: center; padding: 26px 0; }
+
+.sc-card {
+  background: var(--surface-2);
+  border: 1px solid var(--borda);
+  border-radius: var(--raio);
+  padding: 13px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.sc-card:hover { border-color: var(--borda-forte); }
+.sc-eu { border-color: rgba(77, 163, 255, .45); background: rgba(77, 163, 255, .07); }
+
+.sc-topo { display: flex; align-items: flex-start; gap: 12px; justify-content: space-between; }
+.sc-id { min-width: 0; }            /* deixa o nome longo truncar em vez de esticar */
+.sc-id .sc-nome {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 1rem;
+}
+.sc-sub {
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A latência é o número que manda na ordem da lista, então é o único número
+   grande do cartão — e fica sempre na mesma posição, para a coluna da direita
+   virar uma régua que dá para ler descendo. */
+.sc-lat {
+  flex: none;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.sc-lat b { font-size: 1.32rem; font-weight: 680; }
+.sc-lat .sc-un { font-size: 0.72rem; color: var(--muted); margin-left: 2px; }
+.sc-lat small { display: block; font-size: 0.7rem; color: var(--muted); }
+.sc-lat .sc-sem { font-size: 0.74rem; color: var(--muted); }
+.lat-bom b   { color: #8ef0b6; }
+.lat-medio b { color: #ffd479; }
+.lat-ruim b  { color: #ffb3b3; }
+
+.sc-medidor {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .07);
+  overflow: hidden;
+}
+.sc-medidor i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--acento), var(--acento-2));
+}
+/* :has() para a barra herdar a cor do número. Onde ele não existir, a barra
+   fica azul — continua dizendo o tamanho relativo, que é o trabalho dela. */
+.sc-card:has(.lat-ruim) .sc-medidor i { background: linear-gradient(90deg, #ff9d5c, #ff5a5a); }
+.sc-card:has(.lat-medio) .sc-medidor i { background: linear-gradient(90deg, #ffc531, #ff9d5c); }
+
+.sc-marcas { display: flex; flex-wrap: wrap; gap: 5px; }
+
+.sc-campos { margin: 0; display: grid; gap: 4px 12px; }
+.sc-campos > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  justify-content: space-between;
+}
+.sc-campos dt {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.sc-campos dd { margin: 0; text-align: right; min-width: 0; }
+.sc-campos code {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 0.82rem;
+}
+.sc-campos .mac { color: var(--muted); font-size: 0.76rem; }
+.sc-portas { border-top: 1px solid var(--borda); padding-top: 8px; flex-wrap: wrap; }
+.sc-portas dd { font-size: 0.8rem; }
+
+/* Ouro: o cartão inteiro, não só uma etiqueta. Aparelho novo na semana é a
+   única coisa desta seção que alguém procura de longe. */
+.sc-nova {
+  background: var(--ouro-fraco);
+  border-color: rgba(255, 202, 77, .55);
+  box-shadow: inset 3px 0 0 var(--ouro), 0 0 0 1px rgba(255, 202, 77, .12);
+}
+.sc-nova .sc-nome { color: var(--ouro-tinta); border-bottom-color: rgba(255, 202, 77, .5); }
+.sc-nova .sc-portas { border-top-color: rgba(255, 202, 77, .28); }
+
 .legenda-scan { margin-top: 10px; gap: 14px; }
 .legenda-scan .leg { gap: 7px; }
 
@@ -1247,46 +1382,10 @@ main > .painel:nth-of-type(5n+5) { --acento: #ffc531; --acento-2: #ff9d5c; }
 }
 
 @media (max-width: 760px) {
-  /* a tabela da varredura vira cartão, como a de eventos: oito colunas não
-     cabem em tela de celular, e é no celular que se olha "quem está na rede" */
-  #tab-scan thead { display: none; }
-  #tab-scan, #tab-scan tbody { display: block; }
-  #tab-scan tbody tr {
-    display: block;
-    background: var(--surface-2);
-    border: 1px solid var(--borda);
-    border-radius: 10px;
-    padding: 11px 13px;
-    margin-bottom: 10px;
-  }
-  #tab-scan tbody tr:hover td { background: none; }
-  #tab-scan td {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 14px;
-    border: none;
-    padding: 4px 0;
-    white-space: normal;
-    text-align: right;
-  }
-  #tab-scan td::before {
-    content: attr(data-rot);
-    color: var(--muted);
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: .04em;
-    flex: none;
-  }
-  #tab-scan td[data-rot="Aparelho"] {
-    font-size: 1rem;
-    padding-bottom: 8px;
-    margin-bottom: 4px;
-    border-bottom: 1px solid var(--borda);
-    flex-wrap: wrap;
-  }
-  #tab-scan td.vazio { display: block; text-align: center; padding: 18px 0; }
-  #tab-scan td.vazio::before { content: none; }
+  /* os cartões da varredura já nasceram responsivos: aqui só encolhe a grade
+     para uma coluna e deixa o número da latência respirar */
+  .sc-grid { grid-template-columns: 1fr; }
+  .sc-lat b { font-size: 1.42rem; }
   .cel-portas { max-width: none; }
   .qd-num b { font-size: 1.45rem; }
 }

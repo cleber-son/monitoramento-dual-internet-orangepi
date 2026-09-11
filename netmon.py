@@ -23,6 +23,7 @@ import db                            # noqa: E402
 import mesh as mesh_mod              # noqa: E402
 import probe as probe_mod            # noqa: E402
 import server as server_mod          # noqa: E402
+import sistema as sistema_mod        # noqa: E402
 import speedtest as speedtest_mod    # noqa: E402
 
 LOG_PATH = os.path.join(BASE_DIR, "netmon.log")
@@ -74,7 +75,10 @@ def broadcaster(app):
             vigia = app.get("dns_lan")
             app["bus"].publish("status", {"ts": now, "porta": app.get("port"),
                                           "links": links,
-                                          "dns_lan": vigia.snapshot() if vigia else None})
+                                          "dns_lan": vigia.snapshot() if vigia else None,
+                                          # o snapshot tem cache proprio de 3 s:
+                                          # difundir a cada ciclo nao rele /sys
+                                          "sistema": sistema_mod.snapshot()})
         except Exception:
             log.exception("falha difundindo status")
         stop.wait(BROADCAST_EVERY)

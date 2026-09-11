@@ -16,7 +16,7 @@
     <strong id="alerta-titulo">—</strong>
     <span id="alerta-detalhe" class="alerta-detalhe"></span>
   </div>
-  <button id="btn-silenciar" class="btn btn-ghost" type="button">Silenciar som</button>
+  <button id="btn-silenciar" class="btn btn-ghost" type="button">Silenciar som e voz</button>
   <button id="btn-fechar-alerta" class="btn btn-ghost" type="button" aria-label="Fechar">✕</button>
 </div>
 
@@ -28,6 +28,7 @@
   <div class="topo-meta">
     <span id="conexao" class="pill pill-off">conectando…</span>
     <span id="dns-lan" class="pill pill-neutro" title="Resolvedor que os aparelhos da LAN usam. É medido pela rota normal, não preso a uma placa: os links podem estar perfeitos e ainda assim ninguém navegar.">DNS da LAN: —</span>
+    <span id="cpu-temp" class="pill pill-neutro temp-pill" title="Temperatura da CPU deste Orange Pi">🌡️ <b>—</b></span>
     <span id="relogio" class="relogio">--:--:--</span>
     <button id="btn-notif" class="btn btn-ghost" type="button">Ativar notificações</button>
   </div>
@@ -43,15 +44,17 @@
       <p class="painel-sub">Escolha aqui a janela de tempo: <b>latência, perda,
         estatísticas, linha do tempo e o histórico de quedas</b> passam todos a
         falar dela. Os cartões logo abaixo são o estado de <b>agora</b> — só o
-        resumo de quedas desta faixa segue o período.</p>
+        resumo de quedas desta faixa segue o período. O padrão é
+        <b>Ao vivo · 2 h</b>: uma janela de duas horas que anda com o relógio
+        e se redesenha sozinha.</p>
     </div>
     <div class="periodos" id="periodos" role="group" aria-label="Período">
-      <button class="btn-per btn-vivo ativo" data-per="vivo">● Ao vivo</button>
+      <button class="btn-per btn-vivo ativo" data-per="vivo">● Ao vivo · 2 h</button>
       <button class="btn-per" data-per="1m">1 min</button>
       <button class="btn-per" data-per="10m">10 min</button>
       <button class="btn-per" data-per="30m">30 min</button>
       <button class="btn-per" data-per="1h">1 h</button>
-      <button class="btn-per" data-per="2h">2 h</button>
+      <button class="btn-per" data-per="6h">6 h</button>
       <button class="btn-per" data-per="24h">24 h</button>
       <button class="btn-per" data-per="2d">2 dias</button>
       <button class="btn-per" data-per="7d">7 dias</button>
@@ -258,33 +261,39 @@
       <button class="btn" id="sc-pdf" type="button" title="Inventário dos aparelhos desta rede, com os novos da semana destacados">📄 Salvar em PDF</button>
     </div>
   </div>
-  <p id="sc-msg" class="muted">—</p>
   <p id="sc-auto" class="muted sc-auto">—</p>
   <div class="sc-progresso oculto" id="sc-progresso">
     <div class="sc-barra"><i id="sc-barra-fill"></i></div>
     <span class="muted" id="sc-etapa"></span>
   </div>
-  <div class="tabela-wrap">
-    <table class="tabela tabela-scan" id="tab-scan">
-      <thead><tr>
-        <th scope="col">Aparelho</th><th scope="col">IP</th><th scope="col">MAC</th>
-        <th scope="col">Fabricante</th><th scope="col">Conexão</th>
-        <th scope="col">Latência</th><th scope="col">Portas abertas</th>
-        <th scope="col">Conhecido desde</th>
-      </tr></thead>
-      <tbody></tbody>
-    </table>
+
+  <div class="sc-lista-topo">
+    <p id="sc-msg" class="muted">—</p>
+    <label class="campo campo-curto"><span>Ordenar por</span>
+      <select id="sc-ordem">
+        <option value="lat" selected>Latência: maior primeiro</option>
+        <option value="lat-asc">Latência: menor primeiro</option>
+        <option value="novo">Novidades primeiro</option>
+        <option value="ip">Endereço IP</option>
+        <option value="nome">Nome</option>
+      </select>
+    </label>
   </div>
+
+  <div class="sc-grid" id="sc-grid"></div>
+
   <div class="legenda legenda-scan">
     <span class="leg"><span class="tag tag-semana">✨ novo na semana</span>apareceu
-      pela primeira vez nos últimos 7 dias</span>
+      pela primeira vez nos últimos 7 dias — o cartão inteiro fica dourado</span>
     <span class="leg"><span class="chip-con c-cabo">🔌 cabo</span>latência baixa e firme</span>
     <span class="leg"><span class="chip-con c-wifi">📶 Wi-Fi</span>latência maior e variável</span>
     <span class="leg"><span class="chip-con c-indefinida">? indefinida</span>entre os dois</span>
     <span class="leg"><span class="chip-con c-desconhecida">— sem medida</span>só apareceu no ARP</span>
-    <span class="leg muted">Cabo ou Wi-Fi é <b>palpite pela latência</b>: não existe
-      como perguntar isso a um aparelho pela rede. Clique no nome para batizar o
-      aparelho — o apelido fica guardado pelo MAC.</span>
+    <span class="leg muted">A <b>barra sob o nome</b> é a latência do aparelho em
+      relação ao mais lento da rede: quanto mais cheia, mais devagar ele responde.
+      Cabo ou Wi-Fi é <b>palpite pela latência</b> — não existe como perguntar isso
+      a um aparelho pela rede. Clique no nome para batizar o aparelho; o apelido
+      fica guardado pelo MAC.</span>
   </div>
 
   <div class="scan-log">
@@ -421,7 +430,16 @@
       <label class="campo campo-check">
         <input type="checkbox" id="c-som"><span>Tocar som quando um link cair</span>
       </label>
+      <label class="campo campo-check">
+        <input type="checkbox" id="c-voz"><span>Falar em voz alta — “GIGA caiu”,
+          “IMPACTA voltou”</span>
+      </label>
     </div>
+    <p class="painel-sub">O aviso falado é para quando o painel está aberto numa aba
+      atrás das outras: um bipe avisa que <em>alguma coisa</em> aconteceu, a voz diz
+      <b>qual link</b> e <b>o que</b> aconteceu, sem você trocar de aba. Depende da
+      voz em português do navegador — se não houver nenhuma instalada, o som e a
+      notificação continuam valendo.</p>
     <h3 class="config-titulo">Teste de velocidade automático</h3>
     <p class="painel-sub">Uma medição por dia, de madrugada, nas duas internets — uma de
       cada vez. Serve de histórico junto à operadora: mostra a velocidade entregue todo
