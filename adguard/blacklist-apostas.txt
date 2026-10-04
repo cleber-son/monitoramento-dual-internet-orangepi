@@ -144,3 +144,41 @@
 ||redtiger.com^
 ||betconstruct.com^
 ||softswiss.com^
+
+! ==== Encontrados no historico de DNS desta rede ====
+! Infraestrutura de plataformas ilegais de cassino (clones do tigrinho) - milhares de consultas por aqui
+||f-1-g-h.com^
+||ycyd123.com^
+||a-b-3-d.com^
+||q-l-7-s.com^
+||l-g-k-8.com^
+||m-i-t-0.com^
+||h-r-1-b.com^
+||s-3-y-q.com^
+||x-7-d-n.com^
+||p-n-1-w.com^
+||a-t-2-f.com^
+||j-q-3-h.com^
+||k-t-5-v.com^
+||u-w-5-m.com^
+||8-w-s-e.com^
+||c1oudfront.com^
+||sgjogo.com^
+/^(.+\.)?790bet[0-9]+\.com$/
+
+! Marcas offshore acessadas daqui
+||22bet.ng^
+||888starz.com^
+||bitstarz.com^
+||dafabet.com^
+||melbet.org^
+||neobet.de^
+||rabona.com^
+||spinbetter.com^
+||sportsbet.io^
+||stake.ac^
+||betcity.net^
+||polycasino.com^
+||energy-casino.app^
+||jackpotjill.com^
+||thelotter.com^
