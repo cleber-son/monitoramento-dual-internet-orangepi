@@ -1,0 +1,97 @@
+# Versao compacta para o AdGuard DNS gratis (limite de 100 regras do usuario).
+# Digite UM dominio por vez na janela "Adicionar regra de usuario", sem o # e sem espacos.
+#
+# Por que tao pouco: das 321 entradas da whitelist do Pi-hole, so estas sao bloqueadas
+# pelo filtro padrao do AdGuard DNS (conferido contra o "AdGuard DNS filter" em 2026-10-04).
+# Bancos, governo, GitHub etc. ja funcionam sem regra nenhuma.
+
+# ===== DESBLOQUEAR DOMINIO (17) - trafego pago, Google Ads, analytics =====
+doubleclick.net
+googleadservices.com
+googlesyndication.com
+google-analytics.com
+analytics.google.com
+googletagmanager.com
+ads.linkedin.com
+clarity.ms
+hotjar.com
+criteo.com
+outbrain.com
+taboola.com
+segment.com
+segment.io
+amplitude.com
+mixpanel.com
+hubspot.com
+
+# ===== BLOQUEAR DOMINIO (66) - casas de aposta =====
+# Bets reguladas no Brasil e dominios de topo de jogo
+bet.br
+bet
+casino
+poker
+bingo
+lotto
+# Cassinos ilegais (tigrinho) acessados pelos aparelhos .72 e .100 da sua rede
+f-1-g-h.com
+ycyd123.com
+a-b-3-d.com
+q-l-7-s.com
+l-g-k-8.com
+m-i-t-0.com
+h-r-1-b.com
+s-3-y-q.com
+x-7-d-n.com
+p-n-1-w.com
+a-t-2-f.com
+j-q-3-h.com
+k-t-5-v.com
+u-w-5-m.com
+8-w-s-e.com
+c1oudfront.com
+sgjogo.com
+# Jogos de cassino (tigrinho, Aviator) - derrubam tambem sites ilegais
+pgsoft.com
+pg-nmga.com
+pragmaticplay.com
+pragmaticplay.net
+spribe.co
+evolution.com
+# Marcas (dominios fora do .bet.br)
+betano.com
+betano.com.br
+bet365.com
+blaze.com
+blaze.ac
+jonbet.com
+betnacional.com
+esportesdasorte.com
+estrelabet.com
+pixbet.com
+sportingbet.com
+superbet.com
+kto.com
+mcgames.com
+brazino777.com
+vaidebet.com
+novibet.com
+betfair.com
+betway.com
+bwin.com
+betsson.com
+stake.com
+stake.ac
+roobet.com
+1xbet.com
+1win.com
+22bet.com
+melbet.com
+mostbet.com
+parimatch.com
+888starz.com
+spinbetter.com
+sportsbet.io
+bc.game
+dafabet.com
+pinnacle.com
+pokerstars.com
