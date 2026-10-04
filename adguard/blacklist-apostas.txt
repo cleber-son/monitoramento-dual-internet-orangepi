@@ -1,0 +1,146 @@
+! Title: Blacklist - casas de aposta (bets) e cassinos online
+! Description: Bloqueia bets reguladas no Brasil (.bet.br), TLDs de jogo, marcas nacionais e internacionais e provedores de cassino/slots (tigrinho)
+! Homepage: https://github.com/cleber-son/monitoramento-dual-internet-orangepi
+! Atualizado em 2026-10-04
+! Sintaxe: ||dominio^ bloqueia o dominio e todos os subdominios
+
+! ==== Bets autorizadas no Brasil ====
+! Desde 2025 toda bet regulamentada pelo Ministerio da Fazenda e obrigada a usar .bet.br,
+! entao esta unica regra derruba todas elas (Betano, Bet365, Superbet, KTO, Sportingbet, Blaze, Estrela, Pixbet...)
+||bet.br^
+
+! ==== Dominios de topo exclusivos de jogo ====
+||bet^
+||casino^
+||poker^
+||bingo^
+||lotto^
+
+! ==== Marcas nacionais (dominios fora do .bet.br) ====
+||apostaganha.com^
+||apostaganha.com.br^
+||apostatudo.com^
+||betano.com^
+||betano.com.br^
+||betdasorte.com^
+||betnacional.com^
+||betpix365.com^
+||betsul.com^
+||betvip.com^
+||blaze.com^
+||blaze.ac^
+||blaze1.space^
+||brazino777.com^
+||donaldbet.com^
+||esportesdasorte.com^
+||esportesdasorte.net^
+||estrelabet.com^
+||estrelabet.com.br^
+||f12bet.com^
+||galerabet.com^
+||jonbet.com^
+||lottoland.com^
+||lottoland.com.br^
+||luvabet.com^
+||mcgames.com^
+||mrjack.com^
+||mrjack.bet^
+||multibet.com^
+||novibet.com^
+||novibet.com.br^
+||pagbet.com^
+||pixbet.com^
+||pixbet.com.br^
+||playpix.com^
+||reals.com^
+||rei.bet^
+||seguro.bet^
+||sorteonline.com.br^
+||sportingbet.com^
+||sportingbet.com.br^
+||superbet.com^
+||superbet.com.br^
+||vaidebet.com^
+||vbet.com^
+||vbet.com.br^
+||betfast.io^
+||bet7k.com^
+||betboom.com^
+||betboom.com.br^
+||bullsbet.com^
+||cassinopix.com^
+||kto.com^
+||ktobet.com^
+||onabet.com^
+||apostou.com^
+||betfusion.com^
+||br4bet.com^
+||lotogreen.com^
+||verabet.com^
+||h2bet.com^
+||tivobet.com^
+||betmotion.com^
+||betmotion.com.br^
+||betwarrior.com^
+||rivalo.com^
+||rivalry.com^
+
+! ==== Marcas internacionais ====
+||1win.com^
+||1xbet.com^
+||22bet.com^
+||888.com^
+||888casino.com^
+||888poker.com^
+||888sport.com^
+||bc.game^
+||bet365.com^
+||bet365.es^
+||betfair.com^
+||betmgm.com^
+||betsson.com^
+||betvictor.com^
+||betway.com^
+||bwin.com^
+||coral.co.uk^
+||draftkings.com^
+||fanduel.com^
+||ggpoker.com^
+||ladbrokes.com^
+||leovegas.com^
+||melbet.com^
+||mostbet.com^
+||paddypower.com^
+||parimatch.com^
+||partypoker.com^
+||pinnacle.com^
+||pokerstars.com^
+||pokerstars.net^
+||roobet.com^
+||rollbit.com^
+||skybet.com^
+||stake.com^
+||stake.us^
+||unibet.com^
+||williamhill.com^
+
+! ==== Provedores de cassino / slots (Fortune Tiger "tigrinho", Aviator, crash games) ====
+! Derrubam os jogos de cassino tambem em sites ilegais que nao estao nesta lista
+||pgsoft.com^
+||pg-nmga.com^
+||pragmaticplay.com^
+||pragmaticplay.net^
+||spribe.co^
+||evolution.com^
+||evo-games.com^
+||playtech.com^
+||netent.com^
+||ezugi.com^
+||spinomenal.com^
+||hacksawgaming.com^
+||relax-gaming.com^
+||playngo.com^
+||nolimitcity.com^
+||redtiger.com^
+||betconstruct.com^
+||softswiss.com^
