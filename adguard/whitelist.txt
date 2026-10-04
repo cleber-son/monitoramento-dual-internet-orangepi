@@ -1,7 +1,7 @@
 ! Title: Whitelist pessoal (migrada do Pi-hole)
 ! Description: Dominios liberados - bancos, governo, engenharia, dev, marketing/ads, licitacao
 ! Homepage: https://github.com/cleber-son/monitoramento-dual-internet-orangepi
-! Gerado em 2026-10-04 a partir do gravity.db do Pi-hole (310 dominios)
+! Gerado em 2026-10-04 a partir do gravity.db do Pi-hole (321 dominios)
 ! Sintaxe: @@||dominio^ libera o dominio e todos os subdominios
 
 ! ==== Banco/Pagamento ====
@@ -259,9 +259,7 @@
 @@||bradesco.com.br^
 @@||c6bank.com.br^
 @@||caixa.gov.br^
-@@||cipsoft.com^
 @@||clenu.com.br^
-@@||exitlag.com^
 @@||google-analytics.com^
 @@||googleapis.com^
 @@||googletagmanager.com^
@@ -284,7 +282,6 @@
 @@||sebrae.com.br^
 @@||sicoob.com.br^
 @@||sicredi.com.br^
-@@||tibia.com^
 
 ! ==== Plataforma de ads ====
 @@||admanager.google.com^
@@ -314,6 +311,22 @@
 @@||redtrack.io^
 @@||taboola.com^
 @@||voluum.com^
+
+! ==== Jogos - Tibia ====
+@@||battleye.com^
+@@||cipsoft.com^
+@@||exitlag.com^
+@@||tibia.com^
+@@||tibia.fandom.com^
+@@||tibiacompass.com^
+@@||tibiadata.com^
+@@||tibiaeye.app.br^
+@@||tibiamaps.github.io^
+@@||tibiamaps.io^
+@@||tibiaroute.com^
+@@||tibiatrade.gg^
+@@||tibiawiki.com.br^
+@@||yourobot.com.br^
 
 ! ==== Outros ====
 @@||amplitude.com^
