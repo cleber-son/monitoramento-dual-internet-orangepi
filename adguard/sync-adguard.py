@@ -80,7 +80,8 @@ def main():
     if not alvo:
         sys.exit(f"Servidor '{args.servidor}' nao existe. Ha: {[s['name'] for s in servidores]}")
 
-    atuais = alvo["settings"]["user_rules_settings"]["rules"]
+    # a listagem traz rules vazio; so o GET do servidor traz as regras
+    atuais = api("GET", f"/dns_servers/{alvo['id']}", chave)["settings"]["user_rules_settings"]["rules"]
     novas, saem = set(regras) - set(atuais), set(atuais) - set(regras)
     print(f"Servidor '{alvo['name']}' ({alvo['id']}): {len(atuais)} regras hoje -> {len(regras)}"
           f"  (+{len(novas)} / -{len(saem)})")
