@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Envia whitelist.txt + blacklist-apostas.txt para as "Regras do usuario" do AdGuard DNS.
+"""Envia whitelist.txt para as "Regras do usuario" do AdGuard DNS.
+
+A blacklist-apostas.txt NAO vai por aqui: ela esta assinada por URL em
+Servidores > Principal > Listas de bloqueio e se atualiza sozinha. A whitelist
+precisa ficar nas regras do usuario, que sao as unicas que ganham das listas.
 
 A janela do painel so aceita um dominio por vez; a API aceita a lista inteira.
 As listas sao lidas do GitHub (a mesma URL raw que o painel usaria), entao basta
@@ -25,7 +29,7 @@ import urllib.request
 
 API = "https://api.adguard-dns.io/oapi/v1"
 RAW = "https://raw.githubusercontent.com/cleber-son/monitoramento-dual-internet-orangepi/main/adguard/"
-LISTAS = ["whitelist.txt", "blacklist-apostas.txt"]
+LISTAS = ["whitelist.txt"]
 LIMITE = 1000  # plano atual; o gratis e 100
 AQUI = os.path.dirname(os.path.abspath(__file__))
 
